@@ -91,9 +91,9 @@ class PlotRealignemntParameters(BaseInterface):
         ax2.set_xlim((0,realignment_parameters.shape[0]-1))
         
         if title != "":
-            filename = title.replace(" ", "_")+".eps"
+            filename = title.replace(" ", "_")+".pdf"
         else:
-            filename = "plot.eps"
+            filename = "plot.pdf"
         
         F.savefig(filename,papertype="a4",dpi=self.inputs.dpi)
         plt.clf()
@@ -113,7 +113,7 @@ class PlotRealignemntParameters(BaseInterface):
 class PsMergeInputSpec(CommandLineInputSpec):
     in_files = InputMultiPath(File(exists=True), argstr="%s", position=3, mandatory=True)
     out_file = File(argstr="-sOutputFile=%s", position=1, mandatory=True)
-    settings = traits.Enum("printer", "screen", "ebook", "prepress", argstr="-dPDFSETTINGS=/%s", position=2, usedefault=True)
+    settings = traits.Enum("prepress", "printer", "screen", "ebook",  argstr="-dPDFSETTINGS=/%s", position=2, usedefault=True)
     
 class PsMergeOutputSpec(TraitedSpec):
     merged_file = File(exists=True)
@@ -122,7 +122,7 @@ class PsMerge(CommandLine):
     input_spec = PsMergeInputSpec
     output_spec = PsMergeOutputSpec
     
-    cmd = "gs -sDEVICE=pdfwrite -dNOPAUSE -dBATCH -dSAFER"
+    cmd = "gs -sDEVICE=pdfwrite -dNOPAUSE -dBATCH -dSAFER -r300"
     
     def _list_outputs(self):
         outputs = self._outputs().get()
@@ -131,7 +131,7 @@ class PsMerge(CommandLine):
     
 class Ps2PdfInputSpec(CommandLineInputSpec):
     ps_file = File(argstr="%s", position=1, mandatory=True, exists=True)
-    settings = traits.Enum("screen", "ebook", "printer", "prepress", argstr="-dPDFSETTINGS=/%s", position=0)
+    settings = traits.Enum("prepress", "screen", "ebook", "printer",  argstr="-dPDFSETTINGS=/%s", position=0)
     
 class Ps2PdfOutputSpec(TraitedSpec):
     pdf_file = File(exists=True)

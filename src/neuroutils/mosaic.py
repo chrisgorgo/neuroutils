@@ -4,7 +4,7 @@ Created on Feb 26, 2010
 @author: filo
 '''
 import matplotlib as mpl
-mpl.use("Cairo")
+mpl.use("PDF")
 import math
 import numpy as np
 import nibabel as nb
@@ -123,7 +123,7 @@ def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=
         ax3 = F.add_axes([0.05, 0.07, 0.9, 0.15])
 
         slice_grid = sliceGrid(mergeddata, nrows,plane=int_plane)
-        ax1.imshow(slice_grid, origin="lower", interpolation='nearest', cmap=func_struct_cmap)
+        ax1.imshow(slice_grid, cmap=func_struct_cmap, interpolation='nearest', rasterized=False, origin='lower')
          
         norma = mpl.colors.Normalize(vmin=orig_odata[mdata != 0].min(), vmax=orig_odata[mdata != 0].max())
         
@@ -144,11 +144,11 @@ def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=
         del mergeddata
         del slice_grid
     else:
-        ax1.imshow(sliceGrid(bdata,nrows,plane=int_plane), origin="lower", interpolation='nearest', cmap=plt.cm.gray)
+        ax1.imshow(sliceGrid(bdata,nrows,plane=int_plane), cmap=plt.cm.gray, interpolation='nearest', rasterized=False, origin='lower')
     if title != "":
-        filename = title.replace(" ", "_")+".eps"
+        filename = title.replace(" ", "_")+".pdf"
     else:
-        filename = "plot.eps"
+        filename = "plot.pdf"
         
     del bdata
     F.savefig(filename,papertype="a4",dpi=dpi)
@@ -185,7 +185,7 @@ if __name__ == '__main__':
     
     # fingertapping
     plotMosaic(struct, 
-               overlay="/media/data/2010reliability/workdir/pipeline/finger_foot_lips/report/visualisethresholded_stat/_subject_id_0211541117_20101004/reslice_overlay/rthresholded_map.hdr",
+               overlay="/media/data/2010reliability/workdir/pipeline/finger_foot_lips/report/visualisethresholded_stat/_subject_id_20101014_16907/reslice_overlay/rthresholded_map.hdr",
                #mask="/media/data/2010reliability/workdir/pipeline/finger_foot_lips/_subject_id_0211541117_20101004/reslice_mask/rmask.hdr",
                nrows=10,
                plane='axial',
