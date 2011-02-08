@@ -12,8 +12,8 @@ from mosaic import plotMosaic
 import os
 from nipype.utils.filemanip import split_filename
 import numpy as np
-import matplotlib as mpl
-mpl.use("Cairo")
+#import matplotlib as mpl
+#mpl.use("Cairo")
 import pylab as plt
 
 class OverlayInputSpec(TraitedSpec):

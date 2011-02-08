@@ -10,7 +10,7 @@ from copy import deepcopy
 from nipype.interfaces.base import InputMultiPath,\
     BaseInterface, TraitedSpec, File, Bunch,\
     InterfaceResult, traits, OutputMultiPath
-from scikits.learn import mixture
+#from scikits.learn import mixture
 
 import matplotlib as mpl
 import os
@@ -20,7 +20,7 @@ from gamma_fit import EM as myEM
 from nipype.utils.misc import isdefined
 from nipype.utils.filemanip import split_filename
 import sys
-mpl.use("Cairo")
+#mpl.use("Cairo")
 import pylab as plt
 from mpl_toolkits.axes_grid.anchored_artists import AnchoredText
 import nibabel as nifti

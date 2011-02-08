@@ -4,7 +4,7 @@ Created on Feb 26, 2010
 @author: filo
 '''
 import matplotlib as mpl
-mpl.use("PDF")
+#mpl.use("PDF")
 import math
 import numpy as np
 import nibabel as nb

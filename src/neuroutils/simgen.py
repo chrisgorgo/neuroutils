@@ -3,8 +3,8 @@ import numpy as np
 
 from math import log
 from copy import deepcopy
-from scipy import signal
 from scipy.stats import distributions
+import scipy.ndimage as nd
 
 from nipype.interfaces.base import traits,\
     BaseInterface, TraitedSpec, File, Bunch,\
@@ -12,7 +12,7 @@ from nipype.interfaces.base import traits,\
 import nibabel as nifti
 
 class SimulationGeneratorInputSpec(TraitedSpec):
-    fwhm = traits.Float()
+    sigma = traits.Float()
     volume_shape = traits.List(traits.Int(),minlen=3, maxlen=3)
     activation_shape = traits.List(traits.Int(),minlen=3, maxlen=3)
     SNR = traits.Float()
@@ -43,11 +43,11 @@ class SimulationGenerator(BaseInterface):
 
     def _gen_noisy_sequence(self, pattern):
         source = np.zeros((np.shape(pattern)[0], np.shape(pattern)[1], np.shape(pattern)[2], self.inputs.number_of_blocks*2))
-        g = self._make_gaussian(self.inputs.fwhm * 2)
+        #g = self._make_gaussian(self.inputs.fwhm * 2)
         for i in range(self.inputs.number_of_blocks):
-            source[:, :, :, i] = signal.convolve(in1 = distributions.norm.rvs(size=np.shape(pattern)) + pattern, in2 = g, mode='same');
-            source[:, :, :, i+self.inputs.number_of_blocks] = signal.convolve(distributions.norm.rvs(size=np.shape(pattern)), g, mode='same');
-        return (source - source.min())*100 + 1750
+            source[:, :, :, i] = nd.gaussian_filter(distributions.norm.rvs(size=np.shape(pattern)) + pattern, self.inputs.sigma);
+            source[:, :, :, i+self.inputs.number_of_blocks] = nd.gaussian_filter(distributions.norm.rvs(size=np.shape(pattern)), self.inputs.sigma);
+        return source #(source - source.min())*100 + 1750
     
     def _gen_pattern(self):
         pattern = np.zeros(self.inputs.volume_shape)

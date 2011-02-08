@@ -11,6 +11,8 @@ from nipype.interfaces.nipy.model import FitGLM, EstimateContrast
 from nipype.interfaces.nipy.preprocess import ComputeMask
 from neuroutils.bootstrapping import PermuteTimeSeries
 
+import numpy as np
+
 fsl.FSLCommand.set_default_output_type('NIFTI')
 
 def create_preproc_func_pipeline(ref_slice, n_skip=4, n_slices=30, tr=2.5, sparse=False):
@@ -58,10 +60,10 @@ def create_preproc_func_pipeline(ref_slice, n_skip=4, n_slices=30, tr=2.5, spars
     preproc_func.connect([
                           (inputnode,skip, [("func", "in_file")]),
                           (skip,realign, [("roi_file", "in_files")]),
-                          (realign, compute_mask, [('mean_image','mean_volume')]),
                           (inputnode, coregister, [("struct", "target")]),
                           (realign, coregister,[('mean_image', 'source'),
                                                 ('realigned_files','apply_to_files')]),
+                          (coregister, compute_mask, [('coregistered_source','mean_volume')]),
                           (coregister, slice_timing, [("coregistered_files", "in_files")]),
                           (slice_timing, smooth, [("timecorrected_files","in_files")]),
                           (compute_mask,art,[('brain_mask','mask_file')]),
@@ -72,7 +74,7 @@ def create_preproc_func_pipeline(ref_slice, n_skip=4, n_slices=30, tr=2.5, spars
     
     return preproc_func
 
-def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, units, n_slices, sparse, ref_slice, high_pass_filter_cutoff=128, nipy = False, ar1 = True, name="model"):
+def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, units, n_slices, sparse, ref_slice, high_pass_filter_cutoff=128, nipy = False, ar1 = True, name="model", save_residuals=False):
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['outlier_files', "realignment_parameters", "functional_runs", "mask"]), name="inputnode")
     
     
@@ -97,9 +99,16 @@ def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, unit
     
     model_pipeline = pe.Workflow(name=name)
     
+    model_pipeline.connect([(inputnode,modelspec,[('realignment_parameters','realignment_parameters'),
+                                              ('functional_runs','functional_runs'),
+                                              ('outlier_files','outlier_files')])
+                            ])
+    
     if nipy:
         model_estimate = pe.Node(interface=FitGLM(), name="level1estimate")
         model_estimate.inputs.TR = tr
+        model_estimate.inputs.normalize_design_matrix = True
+        model_estimate.inputs.save_residuals = save_residuals
         if ar1:
             model_estimate.inputs.model = "ar1"
             model_estimate.inputs.method = "kalman"
@@ -108,8 +117,7 @@ def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, unit
             model_estimate.inputs.method = "ols"
         
         model_pipeline.connect([(modelspec, model_estimate,[('session_info','session_info')]),
-                                (inputnode, model_estimate, [('mask','mask')]),
-                                (inputnode, model_estimate, [("functional_runs", "functional_runs")])
+                                (inputnode, model_estimate, [('mask','mask')])
                                 ])
                                 
         if contrasts:
@@ -117,12 +125,14 @@ def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, unit
             contrast_estimate.inputs.contrasts = contrasts
             model_pipeline.connect([
             (model_estimate, contrast_estimate, [("beta","beta"),
-                                                                     ("nvbeta","nvbeta"),
-                                                                     ("s2","s2"),
-                                                                     ("dof", "dof"),
-                                                                     ("axis", "axis"),
-                                                                     ("constants", "constants"),
-                                                                     ("reg_names", "reg_names")])])
+                                                 ("nvbeta","nvbeta"),
+                                                 ("s2","s2"),
+                                                 ("dof", "dof"),
+                                                 ("axis", "axis"),
+                                                 ("constants", "constants"),
+                                                 ("reg_names", "reg_names")]),
+            (inputnode, contrast_estimate, [('mask','mask')]),
+            ])
     else:
         level1design = pe.Node(interface=spm.Level1Design(), name= "level1design")
         level1design.inputs.bases              = {'hrf':{'derivs': [0,0]}}
@@ -164,11 +174,6 @@ def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, unit
                                 (contrastestimate, threshold_topo_ggmm, [('spm_mat_file','inputnode.spm_mat_file'),
                                                                          ('spmT_images', 'inputnode.stat_image')])
                                 ])
-
-    model_pipeline.connect([(inputnode,modelspec,[('realignment_parameters','realignment_parameters'),
-                                                  ('functional_runs','functional_runs'),
-                                                  ('outlier_files','outlier_files')])
-                            ])
     
     return model_pipeline
 
@@ -301,26 +306,45 @@ def create_pipeline_functional_run(name, conditions, onsets, durations, tr, cont
     return pipeline
     
 
-def create_bootstrap_estimation(name, conditions, onsets, durations, tr, contrasts, units='scans', n_slices=30, sparse=False, n_skip=4):
+def create_bootstrap_estimation(name, conditions, onsets, durations, tr, contrasts, units='scans', n_slices=30, sparse=False, n_skip=4, samples=500):
     
     preproc_func = create_preproc_func_pipeline(n_skip=n_skip, n_slices=n_slices, tr=tr, sparse=sparse, ref_slice=n_slices/2)
     
-    whiten = create_model_fit_pipeline(name="whiten", contrasts=None, conditions=conditions, onsets=onsets, durations=durations, tr=tr, units=units, n_slices=n_slices, sparse=sparse, ref_slice= n_slices/2, nipy=True)
+    whiten = create_model_fit_pipeline(name="whiten", 
+                                       contrasts=contrasts, 
+                                       conditions=conditions, 
+                                       onsets=onsets, 
+                                       durations=durations, 
+                                       tr=tr, 
+                                       units=units, 
+                                       n_slices=n_slices, 
+                                       sparse=sparse, 
+                                       ref_slice=n_slices/2, 
+                                       nipy=True,
+                                       save_residuals = True)
     
     permute = pe.Node(interface=PermuteTimeSeries(), name="permute")
-    permute.iterables = ('id', range(1))
-    
+    permute.iterables = ('id', range(samples))
+    #permute.iterables = ('id', range(1))    
+
     model = create_model_fit_pipeline(contrasts=contrasts, 
                                       conditions=conditions, 
                                       onsets=onsets, 
                                       durations=durations, 
-                                      tr=tr, units=units, 
+                                      tr=tr, 
+                                      units=units, 
                                       n_slices=n_slices, 
                                       sparse=sparse, 
                                       ref_slice= n_slices/2, 
                                       nipy=True, 
                                       ar1=False, 
                                       high_pass_filter_cutoff=None)
+    
+    tfce_null = pe.MapNode(interface=fsl.ImageMaths(), name = "tfce_null", iterfield = ['in_file'])
+    tfce_null.inputs.op_string = "-tfce 2 0.5 6"
+    
+    tfce = pe.MapNode(interface=fsl.ImageMaths(), name = "tfce", iterfield = ['in_file'])
+    tfce.inputs.op_string = "-tfce 2 0.5 6"
     
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct"]), name="inputnode")
     
@@ -333,7 +357,171 @@ def create_bootstrap_estimation(name, conditions, onsets, durations, tr, contras
                                               ('art.outlier_files','inputnode.outlier_files'),
                                               ('compute_mask.brain_mask','inputnode.mask')]),
                       (whiten, permute, [('level1estimate.residuals', 'original_volume')]),
+                      (whiten, tfce, [('contrastestimate.stat_maps','in_file')]),
                       (preproc_func, model, [('compute_mask.brain_mask','inputnode.mask')]),
                       (permute, model, [('permuted_volume','inputnode.functional_runs')]),
+                      (model, tfce_null, [('contrastestimate.stat_maps','in_file')])
                       ])
     return pipeline
+
+def create_dwi_preprocess_pipeline(name="preprocess"):
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['dwi']), name="inputnode")
+    
+    preprocess = pe.Workflow(name=name)
+
+    """
+    extract the volume with b=0 (nodif_brain)
+    """
+    
+    fslroi = pe.Node(interface=fsl.ExtractROI(),name='fslroi')
+    fslroi.inputs.t_min=0
+    fslroi.inputs.t_size=1
+    
+    """
+    create a brain mask from the nodif_brain
+    """
+    
+    bet = pe.Node(interface=fsl.BET(),name='bet')
+    bet.inputs.mask=True
+    bet.inputs.frac=0.34
+    
+    """
+    correct the diffusion weighted images for eddy_currents
+    """
+    
+    eddycorrect = pe.Node(interface=fsl.EddyCorrect(),name='eddycorrect')
+    eddycorrect.inputs.ref_num=0
+    
+    preprocess.connect([(inputnode, fslroi,[('dwi','in_file')]),
+                           (inputnode, eddycorrect, [('dwi','in_file')]),
+                           (fslroi,bet,[('roi_file','in_file')]),
+                        ])
+    return preprocess
+
+def create_bedpostx_pipeline(name="bedpostx"):
+    inputnode = pe.Node(interface = util.IdentityInterface(fields=["dwi", "mask"]), 
+                        name="inputnode")
+    
+    mask_dwi = pe.Node(interface = fsl.ImageMaths(op_string = "-mas"), 
+                       name="mask_dwi")
+    slice_dwi = pe.Node(interface = fsl.Split(dimension="z"), name="slice_dwi")
+    slice_mask = pe.Node(interface = fsl.Split(dimension="z"), 
+                         name="slice_mask")
+    
+    preproc = pe.Workflow(name="preproc")
+    
+    preproc.connect([(inputnode, mask_dwi, [('dwi', 'in_file')]),
+                     (inputnode, mask_dwi, [('mask', 'in_file2')]),
+                     (mask_dwi, slice_dwi, [('out_file', 'in_file')]),
+                     (inputnode, slice_mask, [('mask', 'in_file')])
+                     ])
+    
+    xfibres = pe.MapNode(interface=fsl.XFibres(), name="xfibres", 
+                         iterfield=['dwi', 'mask'])
+    
+   
+    # Normal set of parameters
+    xfibres.inputs.n_fibres = 2 
+    xfibres.inputs.fudge = 1 
+    xfibres.inputs.burn_in = 1000 
+    xfibres.inputs.n_jumps = 1250 
+    xfibres.inputs.sample_every = 25
+    xfibres.inputs.model = 1
+    
+    inputnode = pe.Node(interface = util.IdentityInterface(fields=["thsamples", 
+                                                                   "phsamples", 
+                                                                   "fsamples", 
+                                                                   "dyads", 
+                                                                   "mean_dsamples",
+                                                                   "mask"]), 
+                        name="inputnode")
+    
+    merge_thsamples = pe.MapNode(fsl.Merge(dimension="z"), 
+                                 name="merge_thsamples", iterfield=['in_files'])
+    merge_phsamples = pe.MapNode(fsl.Merge(dimension="z"), 
+                                 name="merge_phsamples", iterfield=['in_files'])
+    merge_fsamples = pe.MapNode(fsl.Merge(dimension="z"), 
+                                name="merge_fsamples", iterfield=['in_files'])
+    
+    
+    merge_mean_dsamples = pe.Node(fsl.Merge(dimension="z"), 
+                                  name="merge_mean_dsamples")
+    
+    mean_thsamples = pe.MapNode(fsl.ImageMaths(op_string="-Tmean"), 
+                                name="mean_thsamples", iterfield=['in_file'])
+    mean_phsamples = pe.MapNode(fsl.ImageMaths(op_string="-Tmean"), 
+                                name="mean_phsamples", iterfield=['in_file'])
+    mean_fsamples = pe.MapNode(fsl.ImageMaths(op_string="-Tmean"), 
+                               name="mean_fsamples", iterfield=['in_file'])
+    make_dyads = pe.MapNode(fsl.MakeDyadicVectors(), name="make_dyads", 
+                            iterfield=['theta_vol', 'phi_vol'])
+
+    postproc = pe.Workflow(name="postproc")
+    
+    def transpose(samples_over_fibres):
+        a = np.array(samples_over_fibres)
+        if len(a.shape)==1:
+            a = a.reshape(-1,1)
+        return a.T.tolist()
+    
+    postproc.connect([(inputnode, merge_thsamples, [(('thsamples',transpose), 'in_files')]),
+                      (inputnode, merge_phsamples, [(('phsamples',transpose), 'in_files')]),
+                      (inputnode, merge_fsamples, [(('fsamples',transpose), 'in_files')]),
+                      (inputnode, merge_mean_dsamples, [('mean_dsamples', 'in_files')]),
+                      
+                      (merge_thsamples, mean_thsamples, [('merged_file', 'in_file')]),
+                      (merge_phsamples, mean_phsamples, [('merged_file', 'in_file')]),
+                      (merge_fsamples, mean_fsamples, [('merged_file', 'in_file')]),
+                      (merge_thsamples, make_dyads, [('merged_file', 'theta_vol')]),
+                      (merge_phsamples, make_dyads, [('merged_file', 'phi_vol')]),
+                      (inputnode, make_dyads, [('mask', 'mask')]),
+                      ])
+    
+    inputnode = pe.Node(interface = util.IdentityInterface(fields=["dwi", 
+                                                                   "mask", 
+                                                                   "bvecs", 
+                                                                   "bvals"]), 
+                                                           name="inputnode")
+    
+    bedpostx = pe.Workflow(name=name)
+    bedpostx.connect([(inputnode, preproc, [('mask', 'inputnode.mask')]),
+                      (inputnode, preproc, [('dwi', 'inputnode.dwi')]),
+                      
+                      (preproc, xfibres, [('slice_dwi.out_files', 'dwi'),
+                                          ('slice_mask.out_files', 'mask')]),
+                      (inputnode, xfibres, [('bvals', 'bvals')]),
+                      (inputnode, xfibres, [('bvecs', 'bvecs')]),
+                      
+                      (inputnode, postproc, [('mask', 'inputnode.mask')]),
+                      (xfibres, postproc, [('thsamples','inputnode.thsamples'),
+                                           ('phsamples', 'inputnode.phsamples'),
+                                           ('fsamples', 'inputnode.fsamples'),
+                                           ('dyads', 'inputnode.dyads'),
+                                           ('mean_dsamples', 'inputnode.mean_dsamples')]),
+                      ])
+    return bedpostx
+
+def create_dwi_pipeline(name="proc_dwi"):
+    
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['dwi', "bvecs", "bvals"]), name="inputnode")
+    
+    preprocess = create_dwi_preprocess_pipeline()
+    
+    estimate_bedpost = create_bedpostx_pipeline()
+    
+    dtifit = pe.Node(interface=fsl.DTIFit(),name='dtifit')
+    
+    pipeline = pe.Workflow(name=name)
+    
+    pipeline.connect([(inputnode, preprocess, [("dwi", "inputnode.dwi")]),
+                      (preprocess, dtifit, [('eddycorrect.eddy_corrected','dwi'),
+                                            ("bet.mask_file", "mask")]),
+                      (inputnode, dtifit, [("bvals","bvals"),
+                                           ("bvecs", "bvecs")]),
+                      (preprocess, estimate_bedpost, [('eddycorrect.eddy_corrected','inputnode.dwi'),
+                                                      ("bet.mask_file", "inputnode.mask")]),
+                      (inputnode, estimate_bedpost, [("bvals","inputnode.bvals"),
+                                                     ("bvecs", "inputnode.bvecs")]),
+                                            ])
+    return pipeline
+    
