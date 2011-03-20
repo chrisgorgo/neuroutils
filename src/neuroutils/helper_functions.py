@@ -10,6 +10,7 @@ from nipype.interfaces.utility import Merge
 from nipype.interfaces.nipy.model import FitGLM, EstimateContrast
 from nipype.interfaces.nipy.preprocess import ComputeMask
 from neuroutils.bootstrapping import PermuteTimeSeries
+from nipype.workflows.fsl.dti import create_bedpostx_pipeline
 
 import numpy as np
 
@@ -78,7 +79,7 @@ def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, unit
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['outlier_files', "realignment_parameters", "functional_runs", "mask"]), name="inputnode")
     
     
-    modelspec = pe.Node(interface=model.SpecifyModel(), name= "modelspec")
+    modelspec = pe.Node(interface=model.SpecifySPMModel(), name= "modelspec")
     if high_pass_filter_cutoff:
         modelspec.inputs.high_pass_filter_cutoff = high_pass_filter_cutoff
     
@@ -398,108 +399,117 @@ def create_dwi_preprocess_pipeline(name="preprocess"):
                         ])
     return preprocess
 
-def create_bedpostx_pipeline(name="bedpostx"):
-    inputnode = pe.Node(interface = util.IdentityInterface(fields=["dwi", "mask"]), 
-                        name="inputnode")
+def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
     
-    mask_dwi = pe.Node(interface = fsl.ImageMaths(op_string = "-mas"), 
-                       name="mask_dwi")
-    slice_dwi = pe.Node(interface = fsl.Split(dimension="z"), name="slice_dwi")
-    slice_mask = pe.Node(interface = fsl.Split(dimension="z"), 
-                         name="slice_mask")
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['epi', "stat", 
+                                                                 "dwi", "mask",
+                                                                 "phsamples",
+                                                                 "thsamples",
+                                                                 "fsamples",
+                                                                 "T1"]), 
+                                                                 name="inputnode")
     
-    preproc = pe.Workflow(name="preproc")
-    
-    preproc.connect([(inputnode, mask_dwi, [('dwi', 'in_file')]),
-                     (inputnode, mask_dwi, [('mask', 'in_file2')]),
-                     (mask_dwi, slice_dwi, [('out_file', 'in_file')]),
-                     (inputnode, slice_mask, [('mask', 'in_file')])
-                     ])
-    
-    xfibres = pe.MapNode(interface=fsl.XFibres(), name="xfibres", 
-                         iterfield=['dwi', 'mask'])
-    
-   
-    # Normal set of parameters
-    xfibres.inputs.n_fibres = 2 
-    xfibres.inputs.fudge = 1 
-    xfibres.inputs.burn_in = 1000 
-    xfibres.inputs.n_jumps = 1250 
-    xfibres.inputs.sample_every = 25
-    xfibres.inputs.model = 1
-    
-    inputnode = pe.Node(interface = util.IdentityInterface(fields=["thsamples", 
-                                                                   "phsamples", 
-                                                                   "fsamples", 
-                                                                   "dyads", 
-                                                                   "mean_dsamples",
-                                                                   "mask"]), 
-                        name="inputnode")
-    
-    merge_thsamples = pe.MapNode(fsl.Merge(dimension="z"), 
-                                 name="merge_thsamples", iterfield=['in_files'])
-    merge_phsamples = pe.MapNode(fsl.Merge(dimension="z"), 
-                                 name="merge_phsamples", iterfield=['in_files'])
-    merge_fsamples = pe.MapNode(fsl.Merge(dimension="z"), 
-                                name="merge_fsamples", iterfield=['in_files'])
+    first_dwi = pe.Node(interface=fsl.ExtractROI(t_min=0, t_size=1), name="first_dwi")
+    first_epi = first_dwi.clone(name="first_epi")
     
     
-    merge_mean_dsamples = pe.Node(fsl.Merge(dimension="z"), 
-                                  name="merge_mean_dsamples")
+    coregister = pe.Node(interface=fsl.FLIRT(), name="coregister_epi2dwi")
     
-    mean_thsamples = pe.MapNode(fsl.ImageMaths(op_string="-Tmean"), 
-                                name="mean_thsamples", iterfield=['in_file'])
-    mean_phsamples = pe.MapNode(fsl.ImageMaths(op_string="-Tmean"), 
-                                name="mean_phsamples", iterfield=['in_file'])
-    mean_fsamples = pe.MapNode(fsl.ImageMaths(op_string="-Tmean"), 
-                               name="mean_fsamples", iterfield=['in_file'])
-    make_dyads = pe.MapNode(fsl.MakeDyadicVectors(), name="make_dyads", 
-                            iterfield=['theta_vol', 'phi_vol'])
-
-    postproc = pe.Workflow(name="postproc")
+    reslice_stat = pe.MapNode(interface=fsl.FLIRT(), name="reslice_stat", iterfield=["in_file"])
+    reslice_stat.inputs.apply_xfm = True
+    reslice_mask = pe.Node(interface=fsl.FLIRT(), name="reslice_mask")
+    reslice_mask.inputs.interp = "nearestneighbour"
     
-    def transpose(samples_over_fibres):
-        a = np.array(samples_over_fibres)
-        if len(a.shape)==1:
-            a = a.reshape(-1,1)
-        return a.T.tolist()
+    smm = pe.MapNode(interface = fsl.SMM(), name="smm", iterfield=['spatial_data_file'])
     
-    postproc.connect([(inputnode, merge_thsamples, [(('thsamples',transpose), 'in_files')]),
-                      (inputnode, merge_phsamples, [(('phsamples',transpose), 'in_files')]),
-                      (inputnode, merge_fsamples, [(('fsamples',transpose), 'in_files')]),
-                      (inputnode, merge_mean_dsamples, [('mean_dsamples', 'in_files')]),
+    threshold = pe.MapNode(interface=fsl.Threshold(), name="threshold", iterfield=['in_file'])
+    threshold.inputs.thresh = 0.95
+    
+    probtractx = pe.MapNode(interface=fsl.ProbTrackX(), name="probtractx", iterfield=['waypoints'])
+    probtractx.inputs.opd = True
+    probtractx.inputs.loop_check = True
+    probtractx.inputs.c_thresh = 0.2
+    probtractx.inputs.n_steps = 2000
+    probtractx.inputs.step_length = 0.5
+    probtractx.inputs.n_samples = 100
+    probtractx.inputs.correct_path_distribution = True
+    probtractx.inputs.verbose = 2
+    
+    segment = pe.Node(interface=spm.Segment(), name="segment")
+    segment.inputs.gm_output_type = [False, False, True]
+    segment.inputs.wm_output_type = [False, False, True]
+    segment.inputs.csf_output_type = [False, False, False]
+    
+    th_wm = pe.Node(interface=fsl.Threshold(), name="th_wm")
+    th_wm.inputs.direction = "below"
+    th_wm.inputs.thresh = 0.2
+    th_gm = th_wm.clone("th_gm")
+    
+    wm_gm_interface = pe.Node(fsl.ApplyMask(), name="wm_gm_interface")
+    
+    bet_t1 = pe.Node(fsl.BET(), name="bet_t1")
+    
+    coregister_t1_to_dwi = pe.Node(interface=fsl.FLIRT(), name="coregister_t1_to_dwi")
+    
+    invert_dwi_to_t1_xfm = pe.Node(interface=fsl.ConvertXFM(), name="invert_dwi_to_t1_xfm")
+    invert_dwi_to_t1_xfm.inputs.invert_xfm = True
+    
+    reslice_gm = pe.Node(interface=fsl.FLIRT(), name="reslice_gm")
+    reslice_gm.inputs.apply_xfm = True
+    
+    reslice_wm = reslice_gm.clone("reslice_wm")
+    
+    pipeline = pe.Workflow(name=name)
+    pipeline.connect([(inputnode, first_dwi, [("dwi", "in_file")]),
+                      (inputnode, first_epi, [("epi", "in_file")]),
+                       
+                      (first_epi, coregister, [("roi_file", "in_file")]),
+                      (first_dwi, coregister, [("roi_file", "reference")]),
                       
-                      (merge_thsamples, mean_thsamples, [('merged_file', 'in_file')]),
-                      (merge_phsamples, mean_phsamples, [('merged_file', 'in_file')]),
-                      (merge_fsamples, mean_fsamples, [('merged_file', 'in_file')]),
-                      (merge_thsamples, make_dyads, [('merged_file', 'theta_vol')]),
-                      (merge_phsamples, make_dyads, [('merged_file', 'phi_vol')]),
-                      (inputnode, make_dyads, [('mask', 'mask')]),
-                      ])
-    
-    inputnode = pe.Node(interface = util.IdentityInterface(fields=["dwi", 
-                                                                   "mask", 
-                                                                   "bvecs", 
-                                                                   "bvals"]), 
-                                                           name="inputnode")
-    
-    bedpostx = pe.Workflow(name=name)
-    bedpostx.connect([(inputnode, preproc, [('mask', 'inputnode.mask')]),
-                      (inputnode, preproc, [('dwi', 'inputnode.dwi')]),
+                      (inputnode, reslice_stat, [("stat", "in_file"),
+                                               ("dwi", "reference")]),
+                      (inputnode, reslice_mask, [("mask", "in_file"),
+                                               ("dwi", "reference")]),
+                                               
+                      (coregister, reslice_stat, [("out_matrix_file", "in_matrix_file")]),
+                      (coregister, reslice_mask, [("out_matrix_file", "in_matrix_file")]),
                       
-                      (preproc, xfibres, [('slice_dwi.out_files', 'dwi'),
-                                          ('slice_mask.out_files', 'mask')]),
-                      (inputnode, xfibres, [('bvals', 'bvals')]),
-                      (inputnode, xfibres, [('bvecs', 'bvecs')]),
+                      (reslice_stat, smm, [("out_file", "spatial_data_file")]),
+                      (reslice_mask, smm, [("out_file", "mask")]),
+                      (smm, threshold, [('activation_p_map','in_file')]),
                       
-                      (inputnode, postproc, [('mask', 'inputnode.mask')]),
-                      (xfibres, postproc, [('thsamples','inputnode.thsamples'),
-                                           ('phsamples', 'inputnode.phsamples'),
-                                           ('fsamples', 'inputnode.fsamples'),
-                                           ('dyads', 'inputnode.dyads'),
-                                           ('mean_dsamples', 'inputnode.mean_dsamples')]),
-                      ])
-    return bedpostx
+                      (inputnode,  probtractx, [("phsamples", "phsamples"),
+                                                 ("thsamples", "thsamples"),
+                                                 ("fsamples", "fsamples")]),
+                      (reslice_mask, probtractx, [("out_file", "mask")]),
+                      (threshold, probtractx, [("out_file", "waypoints")]),
+                      
+                      (inputnode, segment, [("T1", "data")]),
+                      
+                      (inputnode, bet_t1, [("T1", "in_file")]),
+                      (bet_t1, coregister_t1_to_dwi, [("out_file", "reference")]),
+                      (first_dwi, coregister_t1_to_dwi, [("roi_file", "in_file")]),
+                      (coregister_t1_to_dwi, invert_dwi_to_t1_xfm, [("out_matrix_file", "in_file")]),
+                      
+                      (invert_dwi_to_t1_xfm, reslice_gm, [("out_file", "in_matrix_file")]),
+                      (segment, reslice_gm, [("native_gm_image", "in_file")]),
+                      (first_dwi, reslice_gm, [("roi_file", "reference")]),
+                      (reslice_gm, th_gm, [("out_file", "in_file")]),
+                      (th_gm, wm_gm_interface, [("out_file", "in_file")]),
+                      
+                      (invert_dwi_to_t1_xfm, reslice_wm, [("out_file", "in_matrix_file")]),
+                      (segment, reslice_wm, [("native_wm_image", "in_file")]),
+                      (first_dwi, reslice_wm, [("roi_file", "reference")]),
+                      (reslice_wm, th_wm, [("out_file", "in_file")]),
+                      (th_wm, wm_gm_interface, [("out_file", "mask_file")]),
+                      (wm_gm_interface, probtractx, [("out_file", "seed")]),
+                      
+                      
+                      
+                      
+    ])
+    return pipeline
+    
 
 def create_dwi_pipeline(name="proc_dwi"):
     
