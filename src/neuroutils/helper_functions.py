@@ -1,6 +1,7 @@
 import nipype.interfaces.utility as util     # utility
 import nipype.pipeline.engine as pe          # pypeline engine
 import nipype.interfaces.spm as spm          # spm
+import nipype.interfaces.diffusion_toolkit as dt          # spm
 import nipype.algorithms.rapidart as ra      # artifact detection
 import nipype.algorithms.modelgen as model   # model specification
 from nipype.interfaces import fsl
@@ -10,45 +11,78 @@ from nipype.interfaces.utility import Merge
 from nipype.interfaces.nipy.model import FitGLM, EstimateContrast
 from nipype.interfaces.nipy.preprocess import ComputeMask
 from neuroutils.bootstrapping import PermuteTimeSeries
-from nipype.workflows.fsl.dti import create_bedpostx_pipeline
+from nipype.workflows.fsl.dti import create_bedpostx_pipeline, create_eddy_correct_pipeline
 
 import numpy as np
 
 fsl.FSLCommand.set_default_output_type('NIFTI')
 
-def create_preproc_func_pipeline(ref_slice, n_skip=4, n_slices=30, tr=2.5, sparse=False):
-    
+def get_n_slices(volume):
+    import nibabel as nb
+    nii = nb.load(volume)
+    return nii.get_shape()[2]
+
+def get_tr(tr, sparse):
     if sparse:
-        real_tr = tr/2
+        return tr/2
     else:
-        real_tr = tr
+        return tr
     
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct"]), name="inputnode")
+def get_ta(real_tr, n_slices):
+    return real_tr - real_tr/float(n_slices)
+
+def get_slice_order(volume):
+    import nibabel as nb
+    nii = nb.load(volume)
+    n_slices = nii.get_shape()[2]
+    return range(1,n_slices+1,2) + range(2,n_slices+1,2)
+
+def get_ref_slice(volume):
+    import nibabel as nb
+    nii = nb.load(volume)
+    n_slices = nii.get_shape()[2]
+    return n_slices/2
+        
+def create_preproc_func_pipeline():#ref_slice, n_skip=4, n_slices=30, tr=2.5, sparse=False):
+    
+#    if sparse:
+#        real_tr = tr/2
+#    else:
+#        real_tr = tr
+    
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct", "TR", "sparse"]), name="inputnode")
 
     skip = pe.Node(interface=fsl.ExtractROI(), name="skip")
-    skip.inputs.t_min = n_skip
+    skip.inputs.t_min = 4 #TODO
     skip.inputs.t_size = 100000
     
     realign = pe.Node(interface=spm.Realign(), name="realign")
     realign.inputs.register_to_mean = True
     
+    tr_convert = pe.Node(interface=util.Function(input_names=['tr', 'sparse'], 
+                                                 output_names=['tr'], 
+                                                 function=get_tr), name="tr_converter")
+    ta = pe.Node(interface=util.Function(input_names=['real_tr', 'n_slices'], 
+                                                 output_names=['ta'], 
+                                                 function=get_ta), name="ta")
+    
     slice_timing = pe.Node(interface=spm.SliceTiming(), name="slice_timing")
-    slice_timing.inputs.num_slices = n_slices
-    slice_timing.inputs.time_repetition = real_tr
-    slice_timing.inputs.time_acquisition = real_tr - real_tr/float(n_slices)
-    slice_timing.inputs.slice_order = range(1,n_slices+1,2) + range(2,n_slices+1,2)
-    slice_timing.inputs.ref_slice = ref_slice
+    #slice_timing.inputs.num_slices = n_slices
+    #slice_timing.inputs.time_repetition = real_tr
+    #slice_timing.inputs.time_acquisition = real_tr - real_tr/float(n_slices)
+    #slice_timing.inputs.slice_order = range(1,n_slices+1,2) + range(2,n_slices+1,2)
+    #slice_timing.inputs.ref_slice = ref_slice
     
     coregister = pe.Node(interface=spm.Coregister(), name="coregister")
     coregister.inputs.jobtype= "estimate"
     
     smooth = pe.Node(interface=spm.Smooth(), name="smooth")
-    smooth.inputs.fwhm = [8, 8, 8]
+    smooth.iterables = ('fwhm', [[8, 8, 8], [0,0,0]])
     
     art = pe.Node(interface=ra.ArtifactDetect(), name="art")
-    art.inputs.use_differences      = [True,True]
+    art.inputs.use_differences      = [True,False]
     art.inputs.use_norm             = True
-    art.inputs.norm_threshold       = 0.5
+    art.inputs.norm_threshold       = 1
     art.inputs.zintensity_threshold = 3
     art.inputs.mask_type            = 'file'
     art.inputs.parameter_source     = 'SPM'
@@ -60,13 +94,27 @@ def create_preproc_func_pipeline(ref_slice, n_skip=4, n_slices=30, tr=2.5, spars
     preproc_func = pe.Workflow(name="preproc_func")
     preproc_func.connect([
                           (inputnode,skip, [("func", "in_file")]),
-                          (skip,realign, [("roi_file", "in_files")]),
+                          
                           (inputnode, coregister, [("struct", "target")]),
                           (realign, coregister,[('mean_image', 'source'),
                                                 ('realigned_files','apply_to_files')]),
                           (coregister, compute_mask, [('coregistered_source','mean_volume')]),
-                          (coregister, slice_timing, [("coregistered_files", "in_files")]),
-                          (slice_timing, smooth, [("timecorrected_files","in_files")]),
+                          (skip, slice_timing, [("roi_file", "in_files"),
+                                                      (('roi_file', get_n_slices), "num_slices"),
+                                                      (('roi_file', get_slice_order), "slice_order"),
+                                                      (('roi_file', get_ref_slice), "ref_slice")
+                                                      ]),
+                          (inputnode, tr_convert, [("sparse", "sparse"),
+                                                   ("TR", "tr")]),
+                          (tr_convert, slice_timing, [("tr", "time_repetition")]),
+                          
+                          (tr_convert, ta, [("tr", "real_tr")]),
+                          (skip, ta, [(('roi_file', get_n_slices), "n_slices")]),
+                          
+                          (ta, slice_timing, [("ta", "time_acquisition")]),     
+                          (slice_timing, realign, [("timecorrected_files", "in_files")]),
+                          
+                          (coregister, smooth, [("coregistered_files","in_files")]),
                           (compute_mask,art,[('brain_mask','mask_file')]),
                           (realign,art,[('realignment_parameters','realignment_parameters')]),
                           (realign,art,[('realigned_files','realigned_files')]),
@@ -75,15 +123,9 @@ def create_preproc_func_pipeline(ref_slice, n_skip=4, n_slices=30, tr=2.5, spars
     
     return preproc_func
 
-def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, units, n_slices, sparse, ref_slice, high_pass_filter_cutoff=128, nipy = False, ar1 = True, name="model", save_residuals=False):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['outlier_files', "realignment_parameters", "functional_runs", "mask"]), name="inputnode")
-    
-    
-    modelspec = pe.Node(interface=model.SpecifySPMModel(), name= "modelspec")
-    if high_pass_filter_cutoff:
-        modelspec.inputs.high_pass_filter_cutoff = high_pass_filter_cutoff
-    
-    subjectinfo = [Bunch(conditions=conditions,
+def create_subject_inf(conditions, onsets, durations):
+    from nipype.interfaces.base import Bunch
+    return [Bunch(conditions=conditions,
                                 onsets=onsets,
                                 durations=durations,
                                 amplitudes=None,
@@ -92,17 +134,49 @@ def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, unit
                                 regressor_names=None,
                                 regressors=None)]
     
+def _get_contrast_index(contrasts):
+    return range(1,len(contrasts)+1)
+
+def _get_microtime_resolution(volume, sparse):
+    import nibabel as nb
+    nii = nb.load(volume)
+    n_slices = nii.get_shape()[3]
+    if sparse:
+        return n_slices*2
+    else:
+        return n_slices
+
+def create_model_fit_pipeline(high_pass_filter_cutoff=128, nipy = False, ar1 = True, name="model", save_residuals=False):
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['outlier_files', "realignment_parameters", "functional_runs", "mask",
+                                                                 'conditions','onsets','durations','TR','contrasts','units','sparse']), name="inputnode")
+    
+    
+    modelspec = pe.Node(interface=model.SpecifySPMModel(), name= "modelspec")
+    if high_pass_filter_cutoff:
+        modelspec.inputs.high_pass_filter_cutoff = high_pass_filter_cutoff
+        
+    create_subject_info = pe.Node(interface=util.Function(input_names=['conditions','onsets','durations'], 
+                                                 output_names=['subject_info'], 
+                                                 function=create_subject_inf), name="create_subject_info")
+    
     modelspec.inputs.concatenate_runs        = True
-    modelspec.inputs.input_units             = units
+    #modelspec.inputs.input_units             = units
     modelspec.inputs.output_units            = "secs"
-    modelspec.inputs.time_repetition         = tr
-    modelspec.inputs.subject_info = subjectinfo
+    #modelspec.inputs.time_repetition         = tr
+    #modelspec.inputs.subject_info = subjectinfo
     
     model_pipeline = pe.Workflow(name=name)
     
-    model_pipeline.connect([(inputnode,modelspec,[('realignment_parameters','realignment_parameters'),
+    model_pipeline.connect([(inputnode, create_subject_info, [('conditions','conditions'),
+                                                               ('onsets','onsets'),
+                                                                ('durations','durations')]),
+                            (inputnode, modelspec,[('realignment_parameters','realignment_parameters'),
                                               ('functional_runs','functional_runs'),
-                                              ('outlier_files','outlier_files')])
+                                              ('outlier_files','outlier_files'),
+                                              ('units', 'input_units'),
+                                              ('TR', 'time_repetition')]),
+                            (create_subject_info, modelspec, [('subject_info', 'subject_info')]),
+                            
                             ])
     
     if nipy:
@@ -143,43 +217,59 @@ def create_model_fit_pipeline(contrasts, conditions, onsets, durations, tr, unit
             level1design.inputs.model_serial_correlations = "none"
             
         level1design.inputs.timing_units       = modelspec.inputs.output_units
-        level1design.inputs.interscan_interval = modelspec.inputs.time_repetition
-        if sparse:
-            level1design.inputs.microtime_resolution = n_slices*2
-        else:
-            level1design.inputs.microtime_resolution = n_slices
-        level1design.inputs.microtime_onset = ref_slice
+        
+        #level1design.inputs.interscan_interval = modelspec.inputs.time_repetition
+#        if sparse:
+#            level1design.inputs.microtime_resolution = n_slices*2
+#        else:
+#            level1design.inputs.microtime_resolution = n_slices
+        #level1design.inputs.microtime_onset = ref_slice
+        
+        microtime_resolution = pe.Node(interface=util.Function(input_names=['volume', 'sparse'], 
+                                                 output_names=['microtime_resolution'], 
+                                                 function=_get_microtime_resolution), name="microtime_resolution")
             
         level1estimate = pe.Node(interface=spm.EstimateModel(), name="level1estimate")
         level1estimate.inputs.estimation_method = {'Classical' : 1}
         
         contrastestimate = pe.Node(interface = spm.EstimateContrast(), name="contrastestimate")
-        contrastestimate.inputs.contrasts = contrasts
+        #contrastestimate.inputs.contrasts = contrasts
         
         threshold = pe.MapNode(interface= spm.Threshold(), name="threshold", iterfield=['contrast_index', 'stat_image'])
-        threshold.inputs.contrast_index = range(1,len(contrasts)+1)
+        #threshold.inputs.contrast_index = range(1,len(contrasts)+1)
         
         threshold_topo_ggmm = neuroutils.CreateTopoFDRwithGGMM("threshold_topo_ggmm")
-        threshold_topo_ggmm.inputs.inputnode.contrast_index = range(1,len(contrasts)+1)
+        #threshold_topo_ggmm.inputs.inputnode.contrast_index = range(1,len(contrasts)+1)
     
         
         model_pipeline.connect([(modelspec, level1design,[('session_info','session_info')]),
-                                (inputnode, level1design, [('mask', 'mask_image')]),
+                                (inputnode, level1design, [('mask', 'mask_image'),
+                                                           ('TR', 'interscan_interval'),
+                                                           (("functional_runs", get_ref_slice), "microtime_onset")]),
+                                (inputnode, microtime_resolution, [("functional_runs", "volume"),
+                                                                   ("sparse", "sparse")]),
+                                (microtime_resolution, level1design, [("microtime_resolution", "microtime_resolution")]),                                   
                                 (level1design,level1estimate,[('spm_mat_file','spm_mat_file')]),
+                                (inputnode, contrastestimate, [('contrasts', 'contrasts')]),
                                 (level1estimate,contrastestimate,[('spm_mat_file','spm_mat_file'),
                                                                   ('beta_images','beta_images'),
                                                                   ('residual_image','residual_image')]),
                                 (contrastestimate, threshold, [('spm_mat_file','spm_mat_file'),
                                                                ('spmT_images', 'stat_image')]),
+                                (inputnode, threshold, [(('contrasts', _get_contrast_index), 'contrast_index')]),
                                 (level1estimate, threshold_topo_ggmm, [('mask_image','inputnode.mask_file')]),
                                 (contrastestimate, threshold_topo_ggmm, [('spm_mat_file','inputnode.spm_mat_file'),
-                                                                         ('spmT_images', 'inputnode.stat_image')])
+                                                                         ('spmT_images', 'inputnode.stat_image')]),
+                                (inputnode, threshold_topo_ggmm, [(('contrasts', _get_contrast_index), 'inputnode.contrast_index')]),
                                 ])
     
     return model_pipeline
 
-def create_visualise_masked_overlay(pipeline_name, name, contrasts):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "mask", "overlays", "ggmm_overlays"]), name="inputnode")
+def _make_titles(task, contrasts, prefix=''):
+    return [(prefix + task + ": " + contrast[0]) for contrast in contrasts]
+
+def create_visualise_masked_overlay(pipeline_name, name):#, contrasts):
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "mask", "overlays", "contrasts", "task_name"]), name="inputnode")
     
     reslice_mask = pe.Node(interface=spm.Coregister(), name="reslice_mask")
     reslice_mask.inputs.jobtype="write"
@@ -191,8 +281,12 @@ def create_visualise_masked_overlay(pipeline_name, name, contrasts):
     
     plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay', 'title'])
     plot.inputs.bbox = True
-    plot.inputs.title = [(pipeline_name + ": " + contrast[0]) for contrast in contrasts]
+    #plot.inputs.title = [(pipeline_name + ": " + contrast[0]) for contrast in contrasts]
     plot.inputs.nrows = 12
+    
+    make_titles = pe.Node(interface=util.Function(input_names=['task','contrasts'], 
+                                                 output_names=['titles'], 
+                                                 function=_make_titles), name="make_titles")
     
     visualise_overlay = pe.Workflow(name="visualise"+name)
     
@@ -201,14 +295,17 @@ def create_visualise_masked_overlay(pipeline_name, name, contrasts):
                                                            ("overlays","source")]),
                                (inputnode,reslice_mask, [("background","target"),
                                                            ("mask","source")]),
+                               (inputnode, make_titles, [('task_name', 'task'),
+                                                         ('contrasts', 'contrasts')]),
+                               (make_titles, plot, [('titles', 'title')]),
                                (reslice_overlay, plot, [("coregistered_source", "overlay")]),
                                (inputnode, plot, [("background", "background")]),
                                (reslice_mask, plot, [("coregistered_source", "mask")]),
                                ])
     return visualise_overlay
 
-def create_visualise_thresholded_overlay(pipeline_name, name, contrasts):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "overlays", "ggmm_overlays"]), name="inputnode")
+def create_visualise_thresholded_overlay(pipeline_name, name):#, contrasts):
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['background', "overlays", "ggmm_overlays", "contrasts", "task_name"]), name="inputnode")
     
     reslice_overlay = pe.Node(interface=spm.Coregister(), name="reslice_overlay")
     reslice_overlay.inputs.jobtype="write"
@@ -217,10 +314,17 @@ def create_visualise_thresholded_overlay(pipeline_name, name, contrasts):
     reslice_ggmm_overlay = reslice_overlay.clone(name="reslice_ggmm_overlay")
     
     plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay', 'title'])
-    plot.inputs.title = [("Topo FDR " + pipeline_name + ": " + contrast[0]) for contrast in contrasts]
+    make_titles_fdr = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
+                                                 output_names=['titles'], 
+                                                 function=_make_titles), name="make_titles_fdr")
+    make_titles_fdr.inputs.prefix = "Topo FDR "
     
     plot_ggmm = plot.clone("plot_ggmm")
-    plot_ggmm.inputs.title = [("Topo GGMM " + pipeline_name + ": " + contrast[0]) for contrast in contrasts]
+    
+    make_titles_ggmm = pe.Node(interface=util.Function(input_names=['task','contrasts', 'prefix'], 
+                                                 output_names=['titles'], 
+                                                 function=_make_titles), name="make_titles_ggmm")
+    make_titles_ggmm.inputs.prefix = "Topo GGMM "
     
     #plot = pe.MapNode(interface=neuroutils.Overlay(), name="plot", iterfield=['overlay'])
     
@@ -233,17 +337,23 @@ def create_visualise_thresholded_overlay(pipeline_name, name, contrasts):
                                                            ("ggmm_overlays","source")]),
                                (reslice_overlay, plot, [("coregistered_source", "overlay")]),
                                (inputnode, plot, [("background", "background")]),
+                               (inputnode, make_titles_fdr, [('task_name', 'task'),
+                                                         ('contrasts', 'contrasts')]),
+                               (make_titles_fdr, plot, [('titles', 'title')]),
                              
                                (reslice_ggmm_overlay, plot_ggmm, [("coregistered_source", "overlay")]),
                                (inputnode, plot_ggmm, [("background", "background")]),
+                               (inputnode, make_titles_ggmm, [('task_name', 'task'),
+                                                         ('contrasts', 'contrasts')]),
+                               (make_titles_ggmm, plot_ggmm, [('titles', 'title')]),
                                ])
     return visualise_overlay
 
-def create_report_pipeline(pipeline_name, contrasts):
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['struct', "raw_stat_images", "thresholded_stat_images", "ggmm_thresholded_stat_images", "mask", "plot_realign"]), name="inputnode")
+def create_report_pipeline(pipeline_name="report"):#, contrasts):
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['struct', "raw_stat_images", "thresholded_stat_images", "ggmm_thresholded_stat_images", "mask", "plot_realign", 'contrasts', 'task_name']), name="inputnode")
     
-    raw_stat_visualise = create_visualise_masked_overlay(pipeline_name=pipeline_name, contrasts=contrasts, name="raw_stat")
-    thresholded_stat_visualise = create_visualise_thresholded_overlay(pipeline_name=pipeline_name, contrasts=contrasts, name="thresholded_stat")
+    raw_stat_visualise = create_visualise_masked_overlay(pipeline_name=pipeline_name, name="raw_stat")
+    thresholded_stat_visualise = create_visualise_thresholded_overlay(pipeline_name=pipeline_name, name="thresholded_stat")
     
     psmerge_raw = pe.Node(interface = neuroutils.PsMerge(), name = "psmerge_raw")
     psmerge_raw.inputs.out_file = "merged.pdf"
@@ -257,10 +367,14 @@ def create_report_pipeline(pipeline_name, contrasts):
     report.connect([
                     (inputnode, raw_stat_visualise, [("struct", "inputnode.background"),
                                                      ("raw_stat_images", "inputnode.overlays"),
-                                                     ("mask", "inputnode.mask")]),
+                                                     ("mask", "inputnode.mask"),
+                                                     ('contrasts', 'inputnode.contrasts'),
+                                                     ('task_name', 'inputnode.task_name')]),
                     (inputnode, thresholded_stat_visualise, [("struct", "inputnode.background"),
                                                              ("thresholded_stat_images", "inputnode.overlays"),
-                                                             ("ggmm_thresholded_stat_images", "inputnode.ggmm_overlays")]),
+                                                             ("ggmm_thresholded_stat_images", "inputnode.ggmm_overlays"),
+                                                             ('contrasts', 'inputnode.contrasts'),
+                                                             ('task_name', 'inputnode.task_name')]),
                                                              
                     (raw_stat_visualise, psmerge_raw, [("plot.plot", "in_files")]),
                     (thresholded_stat_visualise, psmerge_th, [("plot.plot", "in_files")]),
@@ -273,36 +387,50 @@ def create_report_pipeline(pipeline_name, contrasts):
                     ])
     return report
 
-def create_pipeline_functional_run(name, conditions, onsets, durations, tr, contrasts, units='scans', n_slices=30, sparse=False, n_skip=4):
-    if sparse:
-        real_tr = tr/2
-    else:
-        real_tr = tr
+def create_pipeline_functional_run(name="functional_run"):#, conditions, onsets, durations, tr, contrasts, units='scans', n_slices=30, sparse=False, n_skip=4):
+    
+    inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct", 'conditions','onsets','durations','TR','contrasts','units','sparse', 'task_name']), name="inputnode")
+    
+#    if sparse:
+#        real_tr = tr/2
+#    else:
+#        real_tr = tr
     
     
-    preproc_func = create_preproc_func_pipeline(n_skip=n_skip, n_slices=n_slices, tr=tr, sparse=sparse, ref_slice=n_slices/2)
+    preproc_func = create_preproc_func_pipeline()#n_skip=n_skip, n_slices=n_slices, tr=tr, sparse=sparse, ref_slice=n_slices/2)
     
-    model_pipeline = create_model_fit_pipeline(contrasts=contrasts, conditions=conditions, onsets=onsets, durations=durations, tr=tr, units=units, n_slices=n_slices, sparse=sparse, ref_slice= n_slices/2)
+    model_pipeline = create_model_fit_pipeline()#contrasts=contrasts, conditions=conditions, onsets=onsets, durations=durations, tr=tr, units=units, n_slices=n_slices, sparse=sparse, ref_slice= n_slices/2)
     
-    report = create_report_pipeline(pipeline_name=name, contrasts=contrasts)
+    report = create_report_pipeline()#pipeline_name=name, contrasts=contrasts)
     
-    inputnode = pe.Node(interface=util.IdentityInterface(fields=['func', "struct"]), name="inputnode")
+    
     
     pipeline = pe.Workflow(name=name)
     pipeline.connect([
                       (inputnode, preproc_func, [("func", "inputnode.func"),
-                                                 ("struct","inputnode.struct")]),
+                                                 ("struct","inputnode.struct"),
+                                                 ('TR', "inputnode.TR"),
+                                                 ('sparse', "inputnode.sparse")]),
                       (preproc_func, model_pipeline, [('realign.realignment_parameters','inputnode.realignment_parameters'),
                                                       ('smooth.smoothed_files','inputnode.functional_runs'),
                                                       ('art.outlier_files','inputnode.outlier_files'),
                                                       ('compute_mask.brain_mask','inputnode.mask')]),
-                      (inputnode, report, [("struct", "inputnode.struct")]),
+                      (inputnode, model_pipeline, [('contrasts', 'inputnode.contrasts'),
+                                                   ('conditions', 'inputnode.conditions'),
+                                                   ('onsets', 'inputnode.onsets'),
+                                                   ('durations', 'inputnode.durations'),
+                                                   ('TR', 'inputnode.TR'),
+                                                   ('units', 'inputnode.units'),
+                                                   ('sparse', "inputnode.sparse")]),
+                      (inputnode, report, [("struct", "inputnode.struct"),
+                                            ("contrasts", "inputnode.contrasts"),
+                                           ('task_name', 'inputnode.task_name')]),
                       (model_pipeline, report, [("contrastestimate.spmT_images","inputnode.raw_stat_images"),
                                                 ("level1estimate.mask_image", "inputnode.mask"),
                                                 ("threshold.thresholded_map", "inputnode.thresholded_stat_images"),
                                                 ("threshold_topo_ggmm.topo_fdr.thresholded_map", "inputnode.ggmm_thresholded_stat_images")]),
                       (preproc_func, report,[("plot_realign.plot","inputnode.plot_realign")]),
-                      
+#                      
                       ])
     return pipeline
     
@@ -390,11 +518,11 @@ def create_dwi_preprocess_pipeline(name="preprocess"):
     correct the diffusion weighted images for eddy_currents
     """
     
-    eddycorrect = pe.Node(interface=fsl.EddyCorrect(),name='eddycorrect')
-    eddycorrect.inputs.ref_num=0
+    eddycorrect = create_eddy_correct_pipeline("eddycorrect")
+    eddycorrect.inputs.inputnode.ref_num=0
     
     preprocess.connect([(inputnode, fslroi,[('dwi','in_file')]),
-                           (inputnode, eddycorrect, [('dwi','in_file')]),
+                           (inputnode, eddycorrect, [('dwi','inputnode.in_file')]),
                            (fslroi,bet,[('roi_file','in_file')]),
                         ])
     return preprocess
@@ -406,7 +534,8 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
                                                                  "phsamples",
                                                                  "thsamples",
                                                                  "fsamples",
-                                                                 "T1"]), 
+                                                                 "T1",
+                                                                 "stat_labels"]), 
                                                                  name="inputnode")
     
     first_dwi = pe.Node(interface=fsl.ExtractROI(t_min=0, t_size=1), name="first_dwi")
@@ -425,7 +554,7 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
     threshold = pe.MapNode(interface=fsl.Threshold(), name="threshold", iterfield=['in_file'])
     threshold.inputs.thresh = 0.95
     
-    probtractx = pe.MapNode(interface=fsl.ProbTrackX(), name="probtractx", iterfield=['waypoints'])
+    probtractx = pe.Node(interface=fsl.ProbTrackX(), name="probtractx")#, iterfield=['waypoints'])
     probtractx.inputs.opd = True
     probtractx.inputs.loop_check = True
     probtractx.inputs.c_thresh = 0.2
@@ -459,6 +588,13 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
     
     reslice_wm = reslice_gm.clone("reslice_wm")
     
+    particles2trackvis = pe.Node(interface= neuroutils.Particle2Trackvis(), name='particles2trackvis')
+    
+    annotate_trackvis = pe.Node(interface=neuroutils.AnnotateTracts(), name='annotate_trackvis')
+    
+    smooth_tracks = pe.Node(interface=dt.SplineFilter(), name="smooth_tracks")
+    smooth_tracks.inputs.step_length = 0.5
+    
     pipeline = pe.Workflow(name=name)
     pipeline.connect([(inputnode, first_dwi, [("dwi", "in_file")]),
                       (inputnode, first_epi, [("epi", "in_file")]),
@@ -482,7 +618,7 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
                                                  ("thsamples", "thsamples"),
                                                  ("fsamples", "fsamples")]),
                       (reslice_mask, probtractx, [("out_file", "mask")]),
-                      (threshold, probtractx, [("out_file", "waypoints")]),
+                      #(threshold, probtractx, [("out_file", "waypoints")]),
                       
                       (inputnode, segment, [("T1", "data")]),
                       
@@ -504,9 +640,13 @@ def create_prepare_seeds_from_fmri_pipeline(name = "prepare_seeds_from_fmri"):
                       (th_wm, wm_gm_interface, [("out_file", "mask_file")]),
                       (wm_gm_interface, probtractx, [("out_file", "seed")]),
                       
+                      (probtractx, particles2trackvis, [('particle_files', 'particle_files')]),
+                      (reslice_mask, particles2trackvis, [("out_file", "reference_file")]),
                       
-                      
-                      
+                      (particles2trackvis, annotate_trackvis, [('trackvis_file', 'trackvis_file')]),
+                      (smm, annotate_trackvis, [('activation_p_map', 'stat_files')]),
+                      (inputnode, annotate_trackvis, [('stat_labels', 'stat_labels')]),
+                      (annotate_trackvis, smooth_tracks, [('annotated_trackvis_file', 'track_file')])
     ])
     return pipeline
     
@@ -524,11 +664,11 @@ def create_dwi_pipeline(name="proc_dwi"):
     pipeline = pe.Workflow(name=name)
     
     pipeline.connect([(inputnode, preprocess, [("dwi", "inputnode.dwi")]),
-                      (preprocess, dtifit, [('eddycorrect.eddy_corrected','dwi'),
+                      (preprocess, dtifit, [('eddycorrect.outputnode.eddy_corrected','dwi'),
                                             ("bet.mask_file", "mask")]),
                       (inputnode, dtifit, [("bvals","bvals"),
                                            ("bvecs", "bvecs")]),
-                      (preprocess, estimate_bedpost, [('eddycorrect.eddy_corrected','inputnode.dwi'),
+                      (preprocess, estimate_bedpost, [('eddycorrect.outputnode.eddy_corrected','inputnode.dwi'),
                                                       ("bet.mask_file", "inputnode.mask")]),
                       (inputnode, estimate_bedpost, [("bvals","inputnode.bvals"),
                                                      ("bvecs", "inputnode.bvecs")]),

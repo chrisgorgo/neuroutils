@@ -8,7 +8,7 @@ from scipy.stats.distributions import gamma, norm
 import numpy as np
 from scipy.optimize import fmin
 import math
-from nipy.neurospin.clustering.ggmixture import _gam_param
+from nipy.algorithms.clustering.ggmixture import _gam_param
     
 def opt_func(param,x, resp):
     return -np.sum(np.log(gamma.pdf(x, param[0], scale=param[1]))*resp,axis=0)

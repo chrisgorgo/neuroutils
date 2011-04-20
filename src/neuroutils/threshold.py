@@ -35,7 +35,8 @@ import nipype.pipeline.engine as pe          # pypeline engine
 import math
 
 #import sys
-from nipy.neurospin.utils.emp_null import FDR, ENN
+from nipy.algorithms.statistics.empirical_pvalue import NormalEmpiricalNull as ENN 
+from nipy.algorithms.statistics.empirical_pvalue import FDR
 
 def FloodFillWrapper(data, point, thr):
     outdata = np.zeros(data.shape, dtype=np.bool)
@@ -249,10 +250,15 @@ class ThresholdGGMMInputSpec(TraitedSpec):
 class ThresholdGGMMOutputSpec(TraitedSpec):
     threshold = traits.Float()
     thresholded_maps = File(exists=True)
+    histogram = File(exists=True)
 
 class ThresholdGGMM(BaseInterface):
     input_spec = ThresholdGGMMInputSpec
     output_spec = ThresholdGGMMOutputSpec
+    
+    def _gen_thresholded_map_filename(self):
+        _, fname, ext = split_filename(self.inputs.stat_image)
+        return os.path.abspath(fname + "_thr" + ext)
     
     def run(self):
         
@@ -323,18 +329,20 @@ class ThresholdGGMM(BaseInterface):
         thresholded_map = np.reshape(thresholded_map, data.shape)
 
         new_img = nifti.Nifti1Image(thresholded_map, img.get_affine(), img.get_header())
-        nifti.save(new_img, fname+'thresholded_map.nii') 
+        nifti.save(new_img, self._gen_thresholded_map_filename()) 
 
         runtime = Bunch(returncode=0,
                         messages=None,
                         errmessages=None)
         outputs = self.aggregate_outputs()
         return InterfaceResult(deepcopy(self), runtime, outputs=outputs)
+    
     def _list_outputs(self):
         outputs = self._outputs().get()
         fname = self.inputs.stat_image
         outputs['threshold'] = float(self._threshold)
-        outputs['thresholded_maps'] = os.path.abspath(fname+'thresholded_map.nii')
+        outputs['thresholded_maps'] = self._gen_thresholded_map_filename()
+        outputs['histogram'] = os.path.realpath('histogram.pdf')
         return outputs
 
 

@@ -47,11 +47,12 @@ def BoundingBox(data):
     max_z = indices[0].max()
     return [min_z, max_z, min_y, max_y, min_x, max_x]
 
-def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=True, title="", dpi=300):
+def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=True, title="", dpi=300, overlay_range= None):
     int_plane = plane_dict[plane]
     
     bnii = nb.load(background)
     bdata = np.array(bnii.get_data(), dtype=np.float32)
+    bdata[np.isnan(bdata)] = 0
     
     F = plt.figure(figsize=(8.3,11.7))
     t = F.text(0.5, 0.95, title,
@@ -59,7 +60,7 @@ def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=
     ax1 = F.add_axes([0.05, 0.25, 0.85, 0.65])
     ax1.axis("off")
     
-    if overlay is not None and nb.load(overlay).get_data().max() != 0:
+    if overlay is not None and np.any(np.logical_not(np.logical_or(np.isnan(nb.load(overlay).get_data()), nb.load(overlay).get_data() == 0))):
         onii = nb.load(overlay)
         odata = np.array(onii.get_data(), dtype=np.float32)
         if mask is not None:
@@ -76,34 +77,51 @@ def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=
                           
         orig_odata = odata    
         # normalizing overlay data
-
-        odata_not_null_min = odata[mdata != 0].min()
-        odata_not_null_max = odata[mdata != 0].max()
-        bdata_null_min = bdata[mdata == 0].min()
-        bdata_null_max = bdata[mdata == 0].max()
-        
+        if overlay_range:
+            odata_not_null_min = overlay_range[0]
+            odata_not_null_max = overlay_range[1]
+        else:
+            odata_not_null_min = odata[mdata != 0].min()
+            odata_not_null_max = odata[mdata != 0].max()
+            if odata_not_null_min < 0:
+                if abs(odata_not_null_min) < abs(odata_not_null_max):
+                    odata_not_null_min = -odata_not_null_max
+                else:
+                    odata_not_null_max = - odata_not_null_min
+            
+        if odata_not_null_min == odata_not_null_max:
+            odata_not_null_min = 0
+            
         overlayZero = - odata_not_null_min / (odata_not_null_max - odata_not_null_min)
         if overlayZero <0 :
             overlayZero = 0
+            
+        bdata_null_min = bdata[mdata == 0].min()
+        bdata_null_max = bdata[mdata == 0].max()
+        
+
         
         mergeddata = np.ones(bdata.shape)
         mergeddata[mdata == 0] = (bdata[mdata == 0] - bdata_null_min) / (bdata_null_max - bdata_null_min)
-        mergeddata[mdata != 0] = (odata[mdata != 0] - odata_not_null_min) / (odata_not_null_max - odata_not_null_min) + 1
+        mergeddata[mdata != 0] = (odata[mdata != 0] - odata_not_null_min) / (odata_not_null_max - odata_not_null_min) + 3
 
         
         cdict = {'red': ((0.0, 0.0, 0.0),
-                 (0.5, 1.0, 0),
-                 (overlayZero*0.5+0.5, 0.0,1.0),
+                 (0.25, 1.0, 1.0),
+                 (0.75, 1.0,0),
+                 (0.75 + 0.25*overlayZero, 0.0,1.0),
                  (1.0, 1.0, 0)),
          'green': ((0.0, 0.0, 0.0),
-                   (0.5, 1.0, 1.0),
-                   (overlayZero*0.5+0.5, 0,0),
+                   (0.25, 1.0, 1.0),
+                   (0.75, 1.0, 1.0),
+                   (0.75 + 0.25*overlayZero, 0,0),
                    (1.0, 1.0, 0)),
          'blue': ((0.0, 0.0, 0.0),
-                  (0.5, 1.0, 1.0),
-                  (overlayZero*0.5+0.5, 1.0,0),
+                  (0.25, 1.0, 1.0),
+                  (0.75, 1.0,1.0),
+                  (0.75 + 0.25*overlayZero, 1.0,0),
                   (1.0, 0, 0))}
-        func_struct_cmap = mpl.colors.LinearSegmentedColormap('func_struct_colormap', cdict, 256)
+        func_struct_cmap = mpl.colors.LinearSegmentedColormap('func_struct_colormap', cdict, 1024)
         
         cdict = {'red': (
                  (0.0, 1.0, 0),
@@ -117,15 +135,21 @@ def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=
                   (0.0, 1.0, 1.0),
                   (overlayZero, 1.0,0),
                   (1.0, 0, 0))}
-        func_cmap = mpl.colors.LinearSegmentedColormap('func_colormap', cdict, 256)
+        func_cmap = mpl.colors.LinearSegmentedColormap('func_colormap', cdict, 1024)
         
         ax2 = F.add_axes([0.9, 0.25, 0.015, 0.65])
         ax3 = F.add_axes([0.05, 0.07, 0.9, 0.15])
 
         slice_grid = sliceGrid(mergeddata, nrows,plane=int_plane)
-        ax1.imshow(slice_grid, cmap=func_struct_cmap, interpolation='nearest', rasterized=False, origin='lower')
-         
-        norma = mpl.colors.Normalize(vmin=orig_odata[mdata != 0].min(), vmax=orig_odata[mdata != 0].max())
+        ax1.imshow(slice_grid, cmap=func_struct_cmap, interpolation='nearest', rasterized=False, origin='lower', 
+                   norm = mpl.colors.Normalize(vmin=0, vmax=4))
+        
+        if overlay_range:
+            norma = mpl.colors.Normalize(vmin=overlay_range[0], vmax=overlay_range[1])
+        else:
+            norma = mpl.colors.Normalize(vmin=odata_not_null_min, vmax=odata_not_null_max)
+        #norma = mpl.colors.Normalize(vmin=mergeddata.min(), vmax=mergeddata.max())
+        
         
         # ColorbarBase derives from ScalarMappable and puts a colorbar
         # in a specified axes, so it has everything needed for a
@@ -137,6 +161,8 @@ def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=
                                            orientation='vertical')
         cb1.set_label('T values')
         ax3.hist(orig_odata[mdata != 0],bins=50,normed=True)
+        if overlay_range:
+            ax3.set_xlim(left = overlay_range[0], right = overlay_range[1])
         
         del odata
         del mdata
@@ -181,14 +207,16 @@ if __name__ == '__main__':
     #plotSlice("/home/filo/workspace/fmri_tumour/data/pilot1/10_co_COR_3D_IR_PREP.nii",plane=coronal)
     #plotSlice("/home/filo/workspace/fmri_tumour/data/pilot1/10_co_COR_3D_IR_PREP.nii",plane=saggital)
     #plotMosaic("/home/filo/workspace/fmri_tumour/data/pilot1/10_co_COR_3D_IR_PREP.nii")
-    struct = "/media/data/2010reliability/E10800_CONTROL/0211541117_20101004_16864/16864/13_co_COR_3D_IR_PREP.nii"
-    
+    #struct = "/home/filo/workspace/2010reliability/results/volumes/T1/_subject_id_08143633-aec2-49a9-81cf-45867827b871/wmr13_co_COR_3D_IR_PREP_maths.nii"
+    struct = "/home/filo/workspace/2010reliability/results/volumes/T1/_subject_id_3a3e1a6f-dc92-412c-870a-74e4f4e85ddb/wmr14_co_COR_3D_IR_PREP_maths.nii"
     # fingertapping
     plotMosaic(struct, 
-               overlay="/media/data/2010reliability/workdir/pipeline/finger_foot_lips/report/visualisethresholded_stat/_subject_id_20101014_16907/reslice_overlay/rthresholded_map.hdr",
+               overlay="/home/filo/workspace/2010reliability/results/volumes/t_maps/thresholded/_subject_id_08143633-aec2-49a9-81cf-45867827b871/_session_first/_task_name_finger_foot_lips/_thr_method_topo_fdr/0rfinger_t_map_thr.img",
                #mask="/media/data/2010reliability/workdir/pipeline/finger_foot_lips/_subject_id_0211541117_20101004/reslice_mask/rmask.hdr",
                nrows=10,
                plane='axial',
-               title="finger tapping left brodmann area 4",
-               bbox=True)
+               title="bla",
+               bbox=False,
+               #overlay_range=(0, 14)
+               )
     plt.show()

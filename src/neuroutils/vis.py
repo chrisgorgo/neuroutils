@@ -19,6 +19,7 @@ import pylab as plt
 class OverlayInputSpec(TraitedSpec):
     background = File(exists=True, mandatory=True)
     overlay = File(exists=True, mandatory=True)
+    overlay_range = traits.Tuple(traits.Float, traits.Float)
     mask = File(exists=True)
     title = traits.Str("", usedefault=True)
     plane = traits.Enum("axial", "coronal", "sagital", usedefault=True)
@@ -40,9 +41,15 @@ class Overlay(BaseInterface):
             mask = self.inputs.mask
         else:
             mask = None
+            
+        if isdefined(self.inputs.overlay_range):
+            overlay_range = self.inputs.overlay_range
+        else:
+            overlay_range = None
 
         self._plot = plotMosaic(self.inputs.background, 
            overlay=self.inputs.overlay,
+           overlay_range = overlay_range,
            mask=mask,
            nrows=self.inputs.nrows,
            plane=self.inputs.plane,
@@ -60,6 +67,7 @@ class Overlay(BaseInterface):
     
 class PlotRealignemntParametersInputSpec(TraitedSpec):
     realignment_parameters = File(exists=True, mandatory=True)
+    outlier_files = File(exists=True)
     title = traits.Str("Realignment parameters", usedefault=True)
     dpi = traits.Int(300, usedefault = True)
     
@@ -82,6 +90,7 @@ class PlotRealignemntParameters(BaseInterface):
         ax1.set_xlabel("image #")
         ax1.set_ylabel("mm")
         ax1.set_xlim((0,realignment_parameters.shape[0]-1))
+        ax1.set_ylim(bottom = realignment_parameters[:,0:3].min(), top = realignment_parameters[:,0:3].max())
         
         ax2 = plt.subplot2grid((2,2),(1,0), colspan=2)
         handles= ax2.plot(realignment_parameters[:,3:6]*180.0/np.pi)
@@ -89,6 +98,19 @@ class PlotRealignemntParameters(BaseInterface):
         ax2.set_xlabel("image #")
         ax2.set_ylabel("degrees")
         ax2.set_xlim((0,realignment_parameters.shape[0]-1))
+        ax2.set_ylim(bottom=(realignment_parameters[:,3:6]*180.0/np.pi).min(), top= (realignment_parameters[:,3:6]*180.0/np.pi).max())
+        
+        if isdefined(self.inputs.outlier_files):
+            try:
+                outliers = np.loadtxt(self.inputs.outlier_files)
+            except IOError as e:
+                if e.args[0] == "End-of-file reached before encountering data.":
+                    pass
+                else:
+                    raise
+            else:
+                ax1.vlines(outliers, ax1.get_ylim()[0], ax1.get_ylim()[1])
+                ax2.vlines(outliers, ax2.get_ylim()[0], ax2.get_ylim()[1])
         
         if title != "":
             filename = title.replace(" ", "_")+".pdf"

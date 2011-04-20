@@ -3,6 +3,8 @@ from threshold import ThresholdGGMM, CreateTopoFDRwithGGMM, ThresholdGMM, Thresh
 from simgen import SimulationGenerator     
 from resampling import CalculateNonParametricFWEThreshold, CalculateProbabilityFromSamples, CalculateFDRQMap
 from bootstrapping import BootstrapTimeSeries, PermuteTimeSeries
+from bedpostx_particle_reader import Particle2Trackvis
+from annotate_tracks import AnnotateTracts
 
 import numpy as np
 
