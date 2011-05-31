@@ -5,7 +5,7 @@ Created on 29 Jun 2010
 '''
 from nipype.interfaces.base import BaseInterface, TraitedSpec
 import numpy as np
-from nipype.interfaces.traits import File
+from nipype.interfaces.traits_extension import File
 import enthought.traits.api as traits
 import nibabel as nb
 from nipype.utils.filemanip import split_filename

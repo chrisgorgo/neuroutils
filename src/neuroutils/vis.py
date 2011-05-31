@@ -7,7 +7,7 @@ Created on 10 Nov 2010
 from nipype.interfaces.base import \
     BaseInterface, TraitedSpec, File, \
     traits, CommandLineInputSpec, InputMultiPath, CommandLine
-from nipype.utils.misc import isdefined
+from nipype.interfaces.base import isdefined
 from mosaic import plotMosaic
 import os
 from nipype.utils.filemanip import split_filename

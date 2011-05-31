@@ -1,10 +1,10 @@
 import nibabel as nb
 from nipype.interfaces.base import BaseInterface, TraitedSpec, traits,\
     InputMultiPath
-from nipype.interfaces.traits import File
+from nipype.interfaces.traits_extension import File
 import math
 import numpy as np
-from nipype.utils.misc import isdefined
+from nipype.interfaces.base import isdefined
 import os
 
 class CalculateNonParametricFWEThresholdInput(TraitedSpec):

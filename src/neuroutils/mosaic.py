@@ -47,11 +47,17 @@ def BoundingBox(data):
     max_z = indices[0].max()
     return [min_z, max_z, min_y, max_y, min_x, max_x]
 
+def getFlippedData(nii):
+    flip_dims = np.sign(np.diag(nii.get_affine()[0:3]))
+    return nii.get_data()[::flip_dims[0], ::flip_dims[1], ::flip_dims[2]]
+    
+
 def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=True, title="", dpi=300, overlay_range= None):
+    plotEmpty = False
     int_plane = plane_dict[plane]
     
     bnii = nb.load(background)
-    bdata = np.array(bnii.get_data(), dtype=np.float32)
+    bdata = np.array(getFlippedData(bnii), dtype=np.float32)
     bdata[np.isnan(bdata)] = 0
     
     F = plt.figure(figsize=(8.3,11.7))
@@ -60,117 +66,125 @@ def plotMosaic(background, overlay=None, mask=None,nrows=12,plane='axial', bbox=
     ax1 = F.add_axes([0.05, 0.25, 0.85, 0.65])
     ax1.axis("off")
     
-    if overlay is not None and np.any(np.logical_not(np.logical_or(np.isnan(nb.load(overlay).get_data()), nb.load(overlay).get_data() == 0))):
+    if overlay is not None:
         onii = nb.load(overlay)
-        odata = np.array(onii.get_data(), dtype=np.float32)
-        if mask is not None:
-            mnii = nb.load(mask)
-            mdata = np.array(mnii.get_data(), dtype=np.float32)
+        odata = np.array(getFlippedData(onii), dtype=np.float32)
+                         
+        if np.any(np.logical_not(np.logical_or(np.isnan(odata), odata == 0))):
+            if mask is not None:
+                mnii = nb.load(mask)
+                mdata = np.array(getFlippedData(mnii), dtype=np.float32)
+            else:
+                mdata = np.logical_not(np.logical_or(np.isnan(odata), odata == 0))
+                
+            if bbox:
+                    bbox = BoundingBox(mdata)
+                    odata = boundData(odata, bbox)
+                    mdata = boundData(mdata, bbox)
+                    bdata = boundData(bdata, bbox)
+                              
+            orig_odata = odata    
+            # normalizing overlay data
+            if overlay_range:
+                odata_not_null_min = overlay_range[0]
+                odata_not_null_max = overlay_range[1]
+            else:
+                odata_not_null_min = odata[mdata != 0].min()
+                odata_not_null_max = odata[mdata != 0].max()
+                if odata_not_null_min < 0:
+                    if abs(odata_not_null_min) < abs(odata_not_null_max):
+                        odata_not_null_min = -odata_not_null_max
+                    else:
+                        odata_not_null_max = - odata_not_null_min
+                
+            if odata_not_null_min == odata_not_null_max:
+                odata_not_null_min = 0
+                
+            overlayZero = - odata_not_null_min / (odata_not_null_max - odata_not_null_min)
+            if overlayZero <0 :
+                overlayZero = 0
+                
+            bdata_null_min = bdata[mdata == 0].min()
+            bdata_null_max = bdata[mdata == 0].max()
+            
+    
+            
+            mergeddata = np.ones(bdata.shape)
+            mergeddata[mdata == 0] = (bdata[mdata == 0] - bdata_null_min) / (bdata_null_max - bdata_null_min)
+            mergeddata[mdata != 0] = (odata[mdata != 0] - odata_not_null_min) / (odata_not_null_max - odata_not_null_min) + 3
+    
+            
+            cdict = {'red': ((0.0, 0.0, 0.0),
+                     (0.25, 1.0, 1.0),
+                     (0.75, 1.0,0),
+                     (0.75 + 0.25*overlayZero, 0.0,1.0),
+                     (1.0, 1.0, 0)),
+             'green': ((0.0, 0.0, 0.0),
+                       (0.25, 1.0, 1.0),
+                       (0.75, 1.0, 1.0),
+                       (0.75 + 0.25*overlayZero, 0,0),
+                       (1.0, 1.0, 0)),
+             'blue': ((0.0, 0.0, 0.0),
+                      (0.25, 1.0, 1.0),
+                      (0.75, 1.0,1.0),
+                      (0.75 + 0.25*overlayZero, 1.0,0),
+                      (1.0, 0, 0))}
+            func_struct_cmap = mpl.colors.LinearSegmentedColormap('func_struct_colormap', cdict, 1024)
+            
+            cdict = {'red': (
+                     (0.0, 1.0, 0),
+                     (overlayZero, 0.0,1.0),
+                     (1.0, 1.0, 0)),
+             'green': (
+                       (0.0, 1.0, 1.0),
+                       (overlayZero, 0,0),
+                       (1.0, 1.0, 0)),
+             'blue': (
+                      (0.0, 1.0, 1.0),
+                      (overlayZero, 1.0,0),
+                      (1.0, 0, 0))}
+            func_cmap = mpl.colors.LinearSegmentedColormap('func_colormap', cdict, 1024)
+            
+            ax2 = F.add_axes([0.9, 0.25, 0.015, 0.65])
+            ax3 = F.add_axes([0.05, 0.07, 0.9, 0.15])
+    
+            slice_grid = sliceGrid(mergeddata, nrows,plane=int_plane)
+            ax1.imshow(slice_grid, cmap=func_struct_cmap, interpolation='nearest', rasterized=False, origin='lower', 
+                       norm = mpl.colors.Normalize(vmin=0, vmax=4))
+            
+            if overlay_range:
+                norma = mpl.colors.Normalize(vmin=overlay_range[0], vmax=overlay_range[1])
+            else:
+                norma = mpl.colors.Normalize(vmin=odata_not_null_min, vmax=odata_not_null_max)
+            #norma = mpl.colors.Normalize(vmin=mergeddata.min(), vmax=mergeddata.max())
+            
+            
+            # ColorbarBase derives from ScalarMappable and puts a colorbar
+            # in a specified axes, so it has everything needed for a
+            # standalone colorbar.  There are many more kwargs, but the
+            # following gives a basic continuous colorbar with ticks
+            # and labels.
+            cb1 = mpl.colorbar.ColorbarBase(ax2, cmap=func_cmap,
+                                               norm=norma,
+                                               orientation='vertical')
+            cb1.set_label('T values')
+            ax3.hist(orig_odata[mdata != 0],bins=50,normed=True)
+            if overlay_range:
+                ax3.set_xlim(left = overlay_range[0], right = overlay_range[1])
+            
+            del odata
+            del mdata
+            del orig_odata
+            del mergeddata
+            del slice_grid
         else:
-            mdata = np.logical_not(np.logical_or(np.isnan(odata), odata == 0))
-            
-        if bbox:
-                bbox = BoundingBox(mdata)
-                odata = boundData(odata, bbox)
-                mdata = boundData(mdata, bbox)
-                bdata = boundData(bdata, bbox)
-                          
-        orig_odata = odata    
-        # normalizing overlay data
-        if overlay_range:
-            odata_not_null_min = overlay_range[0]
-            odata_not_null_max = overlay_range[1]
-        else:
-            odata_not_null_min = odata[mdata != 0].min()
-            odata_not_null_max = odata[mdata != 0].max()
-            if odata_not_null_min < 0:
-                if abs(odata_not_null_min) < abs(odata_not_null_max):
-                    odata_not_null_min = -odata_not_null_max
-                else:
-                    odata_not_null_max = - odata_not_null_min
-            
-        if odata_not_null_min == odata_not_null_max:
-            odata_not_null_min = 0
-            
-        overlayZero = - odata_not_null_min / (odata_not_null_max - odata_not_null_min)
-        if overlayZero <0 :
-            overlayZero = 0
-            
-        bdata_null_min = bdata[mdata == 0].min()
-        bdata_null_max = bdata[mdata == 0].max()
-        
-
-        
-        mergeddata = np.ones(bdata.shape)
-        mergeddata[mdata == 0] = (bdata[mdata == 0] - bdata_null_min) / (bdata_null_max - bdata_null_min)
-        mergeddata[mdata != 0] = (odata[mdata != 0] - odata_not_null_min) / (odata_not_null_max - odata_not_null_min) + 3
-
-        
-        cdict = {'red': ((0.0, 0.0, 0.0),
-                 (0.25, 1.0, 1.0),
-                 (0.75, 1.0,0),
-                 (0.75 + 0.25*overlayZero, 0.0,1.0),
-                 (1.0, 1.0, 0)),
-         'green': ((0.0, 0.0, 0.0),
-                   (0.25, 1.0, 1.0),
-                   (0.75, 1.0, 1.0),
-                   (0.75 + 0.25*overlayZero, 0,0),
-                   (1.0, 1.0, 0)),
-         'blue': ((0.0, 0.0, 0.0),
-                  (0.25, 1.0, 1.0),
-                  (0.75, 1.0,1.0),
-                  (0.75 + 0.25*overlayZero, 1.0,0),
-                  (1.0, 0, 0))}
-        func_struct_cmap = mpl.colors.LinearSegmentedColormap('func_struct_colormap', cdict, 1024)
-        
-        cdict = {'red': (
-                 (0.0, 1.0, 0),
-                 (overlayZero, 0.0,1.0),
-                 (1.0, 1.0, 0)),
-         'green': (
-                   (0.0, 1.0, 1.0),
-                   (overlayZero, 0,0),
-                   (1.0, 1.0, 0)),
-         'blue': (
-                  (0.0, 1.0, 1.0),
-                  (overlayZero, 1.0,0),
-                  (1.0, 0, 0))}
-        func_cmap = mpl.colors.LinearSegmentedColormap('func_colormap', cdict, 1024)
-        
-        ax2 = F.add_axes([0.9, 0.25, 0.015, 0.65])
-        ax3 = F.add_axes([0.05, 0.07, 0.9, 0.15])
-
-        slice_grid = sliceGrid(mergeddata, nrows,plane=int_plane)
-        ax1.imshow(slice_grid, cmap=func_struct_cmap, interpolation='nearest', rasterized=False, origin='lower', 
-                   norm = mpl.colors.Normalize(vmin=0, vmax=4))
-        
-        if overlay_range:
-            norma = mpl.colors.Normalize(vmin=overlay_range[0], vmax=overlay_range[1])
-        else:
-            norma = mpl.colors.Normalize(vmin=odata_not_null_min, vmax=odata_not_null_max)
-        #norma = mpl.colors.Normalize(vmin=mergeddata.min(), vmax=mergeddata.max())
-        
-        
-        # ColorbarBase derives from ScalarMappable and puts a colorbar
-        # in a specified axes, so it has everything needed for a
-        # standalone colorbar.  There are many more kwargs, but the
-        # following gives a basic continuous colorbar with ticks
-        # and labels.
-        cb1 = mpl.colorbar.ColorbarBase(ax2, cmap=func_cmap,
-                                           norm=norma,
-                                           orientation='vertical')
-        cb1.set_label('T values')
-        ax3.hist(orig_odata[mdata != 0],bins=50,normed=True)
-        if overlay_range:
-            ax3.set_xlim(left = overlay_range[0], right = overlay_range[1])
-        
-        del odata
-        del mdata
-        del orig_odata
-        del mergeddata
-        del slice_grid
+            plotEmpty = True
     else:
+        plotEmpty = True
+        
+    if plotEmpty:
         ax1.imshow(sliceGrid(bdata,nrows,plane=int_plane), cmap=plt.cm.gray, interpolation='nearest', rasterized=False, origin='lower')
+        
     if title != "":
         filename = title.replace(" ", "_")+".pdf"
     else:
