@@ -37,6 +37,7 @@ import math
 #import sys
 from nipy.algorithms.statistics.empirical_pvalue import NormalEmpiricalNull as ENN 
 from nipy.algorithms.statistics.empirical_pvalue import FDR
+from neuroutils.gamma_fit import FixedMeanGaussianComponent
 
 def FloodFillWrapper(data, point, thr):
     outdata = np.zeros(data.shape, dtype=np.bool)
@@ -250,6 +251,7 @@ class ThresholdGGMMInputSpec(TraitedSpec):
     
 class ThresholdGGMMOutputSpec(TraitedSpec):
     threshold = traits.Float()
+    gaussian_mean = traits.Float()
     thresholded_maps = File(exists=True)
     histogram = OutputMultiPath(File(exists=True))
     selected_model = traits.Str()
@@ -305,16 +307,25 @@ class ThresholdGGMM(BaseInterface):
         masked_data = data[mask > 0].ravel().squeeze()
         
         no_signal_components = [GaussianComponent(0, 10)]
+        no_signal_zero_components = [FixedMeanGaussianComponent(0, 10)]
+        
         noise_and_activation_components = deepcopy(no_signal_components)
         noise_and_activation_components.append(GammaComponent(4, 5))
+        noise_zero_and_activation_components = deepcopy(no_signal_zero_components)
+        noise_zero_and_activation_components.append(GammaComponent(4, 5))
+        
         noise_activation_and_deactivation_components = [NegativeGammaComponent(4, 5)] + deepcopy(noise_and_activation_components)
+        noise_zero_activation_and_deactivation_components = [NegativeGammaComponent(4, 5)] + deepcopy(noise_zero_and_activation_components)
         
         best = (None,sys.maxint,None)
         
         for model in self.inputs.models:
             components = {'no_signal': no_signal_components, 
+                          'no_signal_zero': no_signal_zero_components, 
                           'noise_and_activation': noise_and_activation_components, 
-                          'noise_activation_and_deactivation': noise_activation_and_deactivation_components}
+                          'noise_zero_and_activation': noise_zero_and_activation_components, 
+                          'noise_activation_and_deactivation': noise_activation_and_deactivation_components,
+                          'noise_zero_activation_and_deactivation': noise_zero_activation_and_deactivation_components}
             gamma_gauss_pp, bic, ax = self._fit_model(masked_data, components[model], label = model)
             if bic < best[1]:
                 best = (gamma_gauss_pp, bic, model)
@@ -322,10 +333,14 @@ class ThresholdGGMM(BaseInterface):
         gamma_gauss_pp = best[0]
         self._selected_model = best[2]
         active_map = np.zeros(data.shape) == 1
-        if self._selected_model == 'noise_activation_and_deactivation':
+        if self._selected_model.endswith('activation_and_deactivation'):
             active_map[mask] = np.logical_and(gamma_gauss_pp[:,2] > gamma_gauss_pp[:,1], np.logical_and(gamma_gauss_pp[:,2] > gamma_gauss_pp[:,0], data[mask] > 0.01))
-        elif self._selected_model == 'noise_and_activation':
+            self._gaussian_mean = components[self._selected_model][1].mu
+        elif self._selected_model.endswith('and_activation'):
             active_map[mask] = np.logical_and(gamma_gauss_pp[:,1] > gamma_gauss_pp[:,0], data[mask] > 0.01)
+            self._gaussian_mean = components[self._selected_model][0].mu
+        else:
+            self._gaussian_mean = components[self._selected_model][0].mu
                  
         thresholded_map = np.zeros(data.shape)
         thresholded_map[active_map] = data[active_map]
@@ -358,6 +373,7 @@ class ThresholdGGMM(BaseInterface):
         outputs = self._outputs().get()
         fname = self.inputs.stat_image
         outputs['threshold'] = float(self._threshold)
+        outputs['gaussian_mean'] = float(self._gaussian_mean)
         outputs['thresholded_maps'] = self._gen_thresholded_map_filename()
         outputs['selected_model'] = self._selected_model
         outputs['histogram'] = []

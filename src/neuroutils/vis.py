@@ -102,15 +102,16 @@ class PlotRealignemntParameters(BaseInterface):
         
         if isdefined(self.inputs.outlier_files):
             try:
-                outliers = np.loadtxt(self.inputs.outlier_files)
+                outliers = np.loadtxt(self.inputs.outlier_files, ndmin=1)
             except IOError as e:
                 if e.args[0] == "End-of-file reached before encountering data.":
                     pass
                 else:
                     raise
             else:
-                ax1.vlines(outliers, ax1.get_ylim()[0], ax1.get_ylim()[1])
-                ax2.vlines(outliers, ax2.get_ylim()[0], ax2.get_ylim()[1])
+                if outliers.size > 0:
+                    ax1.vlines(outliers, ax1.get_ylim()[0], ax1.get_ylim()[1])
+                    ax2.vlines(outliers, ax2.get_ylim()[0], ax2.get_ylim()[1])
         
         if title != "":
             filename = title.replace(" ", "_")+".pdf"

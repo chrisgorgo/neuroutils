@@ -73,6 +73,23 @@ class GaussianComponent(object):
         self.mu = np.sum(data*weights)/weights_sum
         self.sigma = np.sum((data-self.mu)**2*weights)/weights_sum
         
+class FixedMeanGaussianComponent(object):
+    
+    free_parameters = 1
+    
+    def __init__(self, mu, sigma):
+        self.mu = mu
+        self.sigma = sigma
+    
+    def pdf(self, data):
+        #print self.sigma
+        return norm.pdf(data, loc=self.mu, scale=math.sqrt(self.sigma))
+    
+    def fit_weighted(self,data, weights):
+        weights_sum = weights.sum()
+        #self.mu = np.sum(data*weights)/weights_sum
+        self.sigma = np.sum((data-self.mu)**2*weights)/weights_sum
+        
 class PositiveGaussianComponent(object):
     
     free_parameters = 2
@@ -197,10 +214,10 @@ if __name__ == '__main__':
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_tutorial2/l1output/s1/contrasts/_subject_id_s1/_fwhm_4/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/workingdir/_SNR_0.5_activation_shape_[32, 32, 1]_sim_id_7/contrastestimate/spmT_0001.hdr")
-    img = nb.load("/home/filo/workspace/ROIThresholding/spm_auditory_tutorial/main_workflow/masked_analysis/_subject_id_M00223/contrastestimate/spmT_0001.hdr")
+    img = nb.load("/media/data/nipype_examples/spm_auditory_tutorial/main_workflow/masked_analysis/_subject_id_M00223/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/masked_analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
-    mask = nb.load("/home/filo/workspace/ROIThresholding/spm_auditory_tutorial/main_workflow/masked_analysis/_subject_id_M00223/level1estimate/mask.hdr")
+    mask = nb.load("/media/data/nipype_examples/spm_auditory_tutorial/main_workflow/masked_analysis/_subject_id_M00223/level1estimate/mask.hdr")
     data = img.get_data()[mask.get_data() > 0]
     #data = np.array(img.get_data().ravel())
     
