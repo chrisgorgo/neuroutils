@@ -28,13 +28,14 @@ class GammaComponent(object):
     def __init__(self, shape, scale):
         self.shape = shape
         self.scale = scale
+        self.mu = 0
     
     def pdf(self, data):
-        return gamma.pdf(data, self.shape, scale=self.scale)
+        return gamma.pdf(data, self.shape, scale=self.scale, loc=self.mu)
     
     def fit_weighted(self,data, weights):  
 
-        (self.shape, self.scale) = _gam_param(data,weights)
+        (self.shape, self.scale) = _gam_param(data-self.mu,weights)
 #        data = data[data > 0]
 #        weights = weights[data > 0]
 #        opt_func = lambda param, x, resp: -np.sum(np.log(gamma.pdf(x, param[0], scale=param[1]))*resp,axis=0)
@@ -47,13 +48,14 @@ class NegativeGammaComponent(object):
     def __init__(self, shape, scale):
         self.shape = shape
         self.scale = scale
+        self.mu = 0
     
     def pdf(self, data):
-        return gamma.pdf(-data, self.shape, scale=self.scale)
+        return gamma.pdf(-data, self.shape, scale=self.scale, loc=self.mu)
     
     def fit_weighted(self,data, weights):  
 
-        (self.shape, self.scale) = _gam_param(-data,weights)
+        (self.shape, self.scale) = _gam_param(-(data-self.mu),weights)
         #print (self.shape, self.scale)
         
 class GaussianComponent(object):
@@ -142,6 +144,12 @@ class EM(object):
         
     def _M(self,data,resp):
             for i, component in enumerate(self.components):
+                if (isinstance(component, NegativeGammaComponent) or isinstance(component, GammaComponent)):
+                    for c in self.components:
+                        if isinstance(c, GaussianComponent):
+                            component.mu = c.mu
+                            break
+                    
                 component.fit_weighted(data, resp[:,i])
                 self.mix[i] = resp[:,i].sum()/resp[:,i].size
 #                print self.mix[i]
@@ -214,19 +222,21 @@ if __name__ == '__main__':
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_tutorial2/l1output/s1/contrasts/_subject_id_s1/_fwhm_4/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/workingdir/_SNR_0.5_activation_shape_[32, 32, 1]_sim_id_7/contrastestimate/spmT_0001.hdr")
-    img = nb.load("/media/data/nipype_examples/spm_auditory_tutorial/main_workflow/masked_analysis/_subject_id_M00223/contrastestimate/spmT_0001.hdr")
+    img = nb.load("/media/data/2010reliability/workdir_fmri/pipeline/functional_run/model/_subject_id_8bb20980-2dc4-4da9-9065-879e2e7e1fbe/_session_first/_task_name_finger_foot_lips/_roi_False/contrastestimate/spmT_0003.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/masked_analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
-    mask = nb.load("/media/data/nipype_examples/spm_auditory_tutorial/main_workflow/masked_analysis/_subject_id_M00223/level1estimate/mask.hdr")
+    mask = nb.load("/media/data/2010reliability/workdir_fmri/pipeline/functional_run/model/_subject_id_8bb20980-2dc4-4da9-9065-879e2e7e1fbe/_session_first/_task_name_finger_foot_lips/_roi_False/level1estimate/mask.hdr")
     data = img.get_data()[mask.get_data() > 0]
     #data = np.array(img.get_data().ravel())
     
     components = []
-    components.append(GaussianComponent(0, 10))
+    
     #components.append(GaussianComponent(5, 10))
     #components.append(GaussianComponent(-5, 10))
     components.append(GammaComponent(4, 5))
     components.append(NegativeGammaComponent(4, 5))
+    components.append(GaussianComponent(0, 10))
+
     
     em = EM(components)
     
