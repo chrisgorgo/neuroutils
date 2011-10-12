@@ -468,9 +468,9 @@ def CreateTopoFDRwithGGMM(name="topo_fdr_with_ggmm"):
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['stat_image', "spm_mat_file", "contrast_index", "mask_file"]), name="inputnode")
     
     ggmm = pe.MapNode(interface=ThresholdGGMM(no_deactivation_class=False,
-                                              models = ['no_signal',
-                                                        'noise_and_activation',
-                                                        'noise_activation_and_deactivation']), name="ggmm", iterfield=['stat_image'])
+                                              models = ['noise_and_activation',
+                                                        'noise_activation_and_deactivation',
+                                                        'no_signal',]), name="ggmm", iterfield=['stat_image'])
 
     topo_fdr = pe.MapNode(interface = spm.Threshold(), name="topo_fdr", iterfield=['stat_image', 'contrast_index', 'height_threshold'])
     topo_fdr.inputs.use_fwe_correction = False
@@ -479,7 +479,8 @@ def CreateTopoFDRwithGGMM(name="topo_fdr_with_ggmm"):
     topo_fdr_with_ggmm = pe.Workflow(name=name)
     
     topo_fdr_with_ggmm.connect([(inputnode, ggmm, [('stat_image','stat_image'),
-                                                    ('mask_file', 'mask_file')]),
+                                                    ('mask_file', 'mask_file')
+                                                    ]),
                            
                            (inputnode, topo_fdr, [('spm_mat_file', 'spm_mat_file'),
                                                   ('contrast_index', 'contrast_index'),

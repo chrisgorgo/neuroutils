@@ -5,6 +5,7 @@ from resampling import CalculateNonParametricFWEThreshold, CalculateProbabilityF
 from bootstrapping import BootstrapTimeSeries, PermuteTimeSeries
 from bedpostx_particle_reader import Particle2Trackvis
 from annotate_tracks import AnnotateTracts
+from icc import ICC
 
 import numpy as np
 

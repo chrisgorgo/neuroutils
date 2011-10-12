@@ -9,6 +9,7 @@ import numpy as np
 from scipy.optimize import fmin
 import math
 from nipy.algorithms.clustering.ggmixture import _gam_param
+import pylab as plt
     
 def opt_func(param,x, resp):
     return -np.sum(np.log(gamma.pdf(x, param[0], scale=param[1]))*resp,axis=0)
@@ -55,7 +56,7 @@ class NegativeGammaComponent(object):
     
     def fit_weighted(self,data, weights):  
 
-        (self.shape, self.scale) = _gam_param(-(data-self.mu),weights)
+        (self.shape, self.scale) = _gam_param(-(data+self.mu),weights)
         #print (self.shape, self.scale)
         
 class GaussianComponent(object):
@@ -187,10 +188,11 @@ class EM(object):
             
 #            pdf_sum = np.zeros(xRange.shape)
 #            for j, component in enumerate(self.components):
-#                pdf = component.pdf(xRange)*self.mix[j]
+#                pdf = component.pdf(xRange)#*self.mix[j]
 #                plt.plot(xRange, pdf)
 #                pdf_sum += pdf
 #            plt.plot(xRange, pdf_sum)
+            
 #    
             resp = self._E(data)
             #print resp.sum(axis=1).min()
@@ -202,7 +204,10 @@ class EM(object):
                 print "break %f"%improv
                 break
             prev_loglike = cur_loglike
+#            if i == 65:
+#                plt.show()
             print "log likelihood = %f, improv = %f, iter = %d"%(self.loglikelihood(data), improv, i)
+#        plt.show()
         
 if __name__ == '__main__':
 #            

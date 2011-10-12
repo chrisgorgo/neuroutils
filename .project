@@ -3,8 +3,8 @@
 	<name>neuroutils</name>
 	<comment></comment>
 	<projects>
-		<project>nibabel</project>
 		<project>nipy</project>
+		<project>nipype</project>
 	</projects>
 	<buildSpec>
 		<buildCommand>
