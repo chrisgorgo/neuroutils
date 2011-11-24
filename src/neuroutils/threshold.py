@@ -475,6 +475,7 @@ def CreateTopoFDRwithGGMM(name="topo_fdr_with_ggmm"):
     topo_fdr = pe.MapNode(interface = spm.Threshold(), name="topo_fdr", iterfield=['stat_image', 'contrast_index', 'height_threshold'])
     topo_fdr.inputs.use_fwe_correction = False
     topo_fdr.inputs.force_activation = True
+    topo_fdr.inputs.height_threshold_type = 'stat'
     
     topo_fdr_with_ggmm = pe.Workflow(name=name)
     

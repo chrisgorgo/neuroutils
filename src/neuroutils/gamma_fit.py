@@ -227,10 +227,10 @@ if __name__ == '__main__':
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_tutorial2/l1output/s1/contrasts/_subject_id_s1/_fwhm_4/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/workingdir/_SNR_0.5_activation_shape_[32, 32, 1]_sim_id_7/contrastestimate/spmT_0001.hdr")
-    img = nb.load("/media/data/2010reliability/workdir_fmri/pipeline/functional_run/model/_subject_id_8bb20980-2dc4-4da9-9065-879e2e7e1fbe/_session_first/_task_name_finger_foot_lips/_roi_False/contrastestimate/spmT_0003.hdr")
+    img = nb.load("/media/data/2010reliability/workdir_fmri/group/first_level/main/model/_session_first/_subject_id_3a3e1a6f-dc92-412c-870a-74e4f4e85ddb/_task_name_overt_word_repetition/_partition_1/rename_t_maps/mapflow/_rename_t_maps0/task_t_map.img")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/masked_analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
-    mask = nb.load("/media/data/2010reliability/workdir_fmri/pipeline/functional_run/model/_subject_id_8bb20980-2dc4-4da9-9065-879e2e7e1fbe/_session_first/_task_name_finger_foot_lips/_roi_False/level1estimate/mask.hdr")
+    mask = nb.load("/media/data/2010reliability/workdir_fmri/group/first_level/main/model/_session_first/_subject_id_3a3e1a6f-dc92-412c-870a-74e4f4e85ddb/_task_name_overt_word_repetition/_partition_1/level1estimate/mask.img")
     data = img.get_data()[mask.get_data() > 0]
     #data = np.array(img.get_data().ravel())
     
