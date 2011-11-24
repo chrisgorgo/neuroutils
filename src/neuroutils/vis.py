@@ -102,7 +102,7 @@ class PlotRealignemntParameters(BaseInterface):
         
         if isdefined(self.inputs.outlier_files):
             try:
-                outliers = np.loadtxt(self.inputs.outlier_files, ndmin=1)
+                outliers = np.loadtxt(self.inputs.outlier_files)
             except IOError as e:
                 if e.args[0] == "End-of-file reached before encountering data.":
                     pass
