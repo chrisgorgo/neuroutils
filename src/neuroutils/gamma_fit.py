@@ -10,6 +10,7 @@ from scipy.optimize import fmin
 import math
 from nipy.algorithms.clustering.ggmixture import _gam_param
 import pylab as plt
+from copy import deepcopy
     
 def opt_func(param,x, resp):
     return -np.sum(np.log(gamma.pdf(x, param[0], scale=param[1]))*resp,axis=0)
@@ -32,7 +33,7 @@ class GammaComponent(object):
         self.mu = 0
     
     def pdf(self, data):
-        return gamma.pdf(data, self.shape, scale=self.scale, loc=self.mu)
+        return gamma.pdf(data-self.mu, self.shape, scale=self.scale)
     
     def fit_weighted(self,data, weights):  
 
@@ -52,11 +53,11 @@ class NegativeGammaComponent(object):
         self.mu = 0
     
     def pdf(self, data):
-        return gamma.pdf(-data, self.shape, scale=self.scale, loc=self.mu)
+        return gamma.pdf(-(data-self.mu), self.shape, scale=self.scale)
     
     def fit_weighted(self,data, weights):  
 
-        (self.shape, self.scale) = _gam_param(-(data+self.mu),weights)
+        (self.shape, self.scale) = _gam_param(-(data-self.mu),weights)
         #print (self.shape, self.scale)
         
 class GaussianComponent(object):
@@ -227,10 +228,10 @@ if __name__ == '__main__':
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_tutorial2/l1output/s1/contrasts/_subject_id_s1/_fwhm_4/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/workingdir/_SNR_0.5_activation_shape_[32, 32, 1]_sim_id_7/contrastestimate/spmT_0001.hdr")
-    img = nb.load("/media/data/2010reliability/workdir_fmri/group/first_level/main/model/_session_first/_subject_id_3a3e1a6f-dc92-412c-870a-74e4f4e85ddb/_task_name_overt_word_repetition/_partition_1/rename_t_maps/mapflow/_rename_t_maps0/task_t_map.img")
+    img = nb.load("/mnt/data/case_studies/workdir_fmri/17904/pipeline/functional_run/model/threshold_topo_ggmm/_task_name_finger_foot_lips/ggmm/mapflow/_ggmm4/foot_vs_other_t_map.img")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/masked_analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
-    mask = nb.load("/media/data/2010reliability/workdir_fmri/group/first_level/main/model/_session_first/_subject_id_3a3e1a6f-dc92-412c-870a-74e4f4e85ddb/_task_name_overt_word_repetition/_partition_1/level1estimate/mask.img")
+    mask = nb.load("/mnt/data/case_studies/workdir_fmri/17904/pipeline/functional_run/model/_task_name_finger_foot_lips/level1estimate/mask.img")
     data = img.get_data()[mask.get_data() > 0]
     #data = np.array(img.get_data().ravel())
     
@@ -238,10 +239,18 @@ if __name__ == '__main__':
     
     #components.append(GaussianComponent(5, 10))
     #components.append(GaussianComponent(-5, 10))
-    components.append(GammaComponent(4, 5))
-    components.append(NegativeGammaComponent(4, 5))
-    components.append(GaussianComponent(0, 10))
+    no_signal_components = [GaussianComponent(0, 10)]
+    no_signal_zero_components = [FixedMeanGaussianComponent(0, 10)]
+    
+    noise_and_activation_components = deepcopy(no_signal_components)
+    noise_and_activation_components.append(GammaComponent(4, 5))
+    noise_zero_and_activation_components = deepcopy(no_signal_zero_components)
+    noise_zero_and_activation_components.append(GammaComponent(4, 5))
+    
+    noise_activation_and_deactivation_components = [NegativeGammaComponent(4, 5)] + deepcopy(noise_and_activation_components)
+    noise_zero_activation_and_deactivation_components = [NegativeGammaComponent(4, 5)] + deepcopy(noise_zero_and_activation_components)
 
+    components = noise_activation_and_deactivation_components
     
     em = EM(components)
     

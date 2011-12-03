@@ -251,8 +251,10 @@ class ThresholdGGMMInputSpec(TraitedSpec):
     
 class ThresholdGGMMOutputSpec(TraitedSpec):
     threshold = traits.Float()
+    corrected_threshold = traits.Float()
     gaussian_mean = traits.Float()
-    thresholded_maps = File(exists=True)
+    unthresholded_corrected_map = File(exists=True)
+    thresholded_map = File(exists=True)
     histogram = OutputMultiPath(File(exists=True))
     selected_model = traits.Str()
 
@@ -263,6 +265,9 @@ class ThresholdGGMM(BaseInterface):
     def _gen_thresholded_map_filename(self):
         _, fname, ext = split_filename(self.inputs.stat_image)
         return os.path.abspath(fname + "_thr" + ext)
+    def _gen_corrected_map_filename(self):
+        _, fname, ext = split_filename(self.inputs.stat_image)
+        return os.path.abspath(fname + "_corr" + ext)
     
 
     def _fit_model(self, masked_data, components, label):
@@ -348,6 +353,8 @@ class ThresholdGGMM(BaseInterface):
             self._threshold = data[active_map].min()
         else:
             self._threshold = masked_data.max() + 1 #setting artificially high threshold
+            
+        self._corrected_threshold = self._threshold + self._gaussian_mean
         #output = open(fname+'threshold.pkl', 'wb')
         #cPickle.dump(self._threshold, output)
         #output.close()
@@ -365,7 +372,12 @@ class ThresholdGGMM(BaseInterface):
         thresholded_map = np.reshape(thresholded_map, data.shape)
 
         new_img = nifti.Nifti1Image(thresholded_map, img.get_affine(), img.get_header())
-        nifti.save(new_img, self._gen_thresholded_map_filename()) 
+        nifti.save(new_img, self._gen_thresholded_map_filename())
+        
+        corrected_data = data.copy()
+        corrected_data[mask > 0] += self._gaussian_mean
+        new_img = nifti.Nifti1Image(corrected_data, img.get_affine(), img.get_header())
+        nifti.save(new_img, self._gen_corrected_map_filename())
 
         return runtime
     
@@ -373,8 +385,10 @@ class ThresholdGGMM(BaseInterface):
         outputs = self._outputs().get()
         fname = self.inputs.stat_image
         outputs['threshold'] = float(self._threshold)
+        outputs['corrected_threshold'] = float(self._corrected_threshold)
         outputs['gaussian_mean'] = float(self._gaussian_mean)
-        outputs['thresholded_maps'] = self._gen_thresholded_map_filename()
+        outputs['thresholded_map'] = self._gen_thresholded_map_filename()
+        outputs['unthresholded_corrected_map'] = self._gen_corrected_map_filename()
         outputs['selected_model'] = self._selected_model
         outputs['histogram'] = []
         for model in self.inputs.models:
@@ -463,7 +477,7 @@ class ThresholdEmpNullFDR(BaseInterface):
     
    
     
-def CreateTopoFDRwithGGMM(name="topo_fdr_with_ggmm"):
+def CreateTopoFDRwithGGMM(name="topo_fdr_with_ggmm", correct=False):
     
     inputnode = pe.Node(interface=util.IdentityInterface(fields=['stat_image', "spm_mat_file", "contrast_index", "mask_file"]), name="inputnode")
     
@@ -471,11 +485,13 @@ def CreateTopoFDRwithGGMM(name="topo_fdr_with_ggmm"):
                                               models = ['noise_and_activation',
                                                         'noise_activation_and_deactivation',
                                                         'no_signal',]), name="ggmm", iterfield=['stat_image'])
+    
 
     topo_fdr = pe.MapNode(interface = spm.Threshold(), name="topo_fdr", iterfield=['stat_image', 'contrast_index', 'height_threshold'])
     topo_fdr.inputs.use_fwe_correction = False
     topo_fdr.inputs.force_activation = True
     topo_fdr.inputs.height_threshold_type = 'stat'
+    
     
     topo_fdr_with_ggmm = pe.Workflow(name=name)
     
@@ -484,10 +500,18 @@ def CreateTopoFDRwithGGMM(name="topo_fdr_with_ggmm"):
                                                     ]),
                            
                            (inputnode, topo_fdr, [('spm_mat_file', 'spm_mat_file'),
-                                                  ('contrast_index', 'contrast_index'),
-                                                  ('stat_image','stat_image')]),
+                                                  ('contrast_index', 'contrast_index')])
+                           ])
+    if correct:
+        topo_fdr_with_ggmm.connect([
+                           (ggmm, topo_fdr,[('corrected_threshold','height_threshold'),
+                                            ('unthresholded_corrected_map','stat_image')])
+                           ])
+    else:
+        topo_fdr_with_ggmm.connect([
+                            (inputnode, topo_fdr, [('stat_image','stat_image')
+                                                    ]),
                            (ggmm, topo_fdr,[('threshold','height_threshold')])
                            ])
-    
     
     return topo_fdr_with_ggmm
