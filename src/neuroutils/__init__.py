@@ -1,6 +1,9 @@
+from nipype.utils.config import config
+import matplotlib
+matplotlib.use(config.get("execution", "matplotlib_backend"))
 from vis import Overlay, PsMerge, Ps2Pdf, PlotRealignemntParameters
 from threshold import ThresholdGGMM, CreateTopoFDRwithGGMM, ThresholdGMM, ThresholdFDR
-from simgen import SimulationGenerator     
+from simgen import SimulationGenerator
 from resampling import CalculateNonParametricFWEThreshold, CalculateProbabilityFromSamples, CalculateFDRQMap
 from bootstrapping import BootstrapTimeSeries, PermuteTimeSeries
 from bedpostx_particle_reader import Particle2Trackvis

@@ -12,7 +12,10 @@ from nipype.interfaces.base import InputMultiPath,\
     InterfaceResult, traits, OutputMultiPath
 #from scikits.learn import mixture
 
-import matplotlib as mpl
+from nipype.utils.config import config
+import matplotlib
+from scipy.stats.distributions import gamma
+matplotlib.use(config.get("execution", "matplotlib_backend"))
 import os
 from gamma_fit import GaussianComponent, GammaComponent,\
     NegativeGammaComponent
@@ -248,6 +251,7 @@ class ThresholdGGMMInputSpec(TraitedSpec):
     no_deactivation_class = traits.Bool(False, usedefault=True)
     mask_file = File(exists=True)
     models = traits.List()
+    FNR_threshold = traits.Range(low = 0.0, high=1.0, exclude_low = True, exclude_high = True)
     
 class ThresholdGGMMOutputSpec(TraitedSpec):
     threshold = traits.Float()
@@ -337,22 +341,36 @@ class ThresholdGGMM(BaseInterface):
 
         gamma_gauss_pp = best[0]
         self._selected_model = best[2]
-        active_map = np.zeros(data.shape) == 1
-        if self._selected_model.endswith('activation_and_deactivation'):
-            active_map[mask] = np.logical_and(gamma_gauss_pp[:,2] > gamma_gauss_pp[:,1], np.logical_and(gamma_gauss_pp[:,2] > gamma_gauss_pp[:,0], data[mask] > 0.01))
-            self._gaussian_mean = components[self._selected_model][1].mu
-        elif self._selected_model.endswith('and_activation'):
-            active_map[mask] = np.logical_and(gamma_gauss_pp[:,1] > gamma_gauss_pp[:,0], data[mask] > 0.01)
-            self._gaussian_mean = components[self._selected_model][0].mu
-        else:
-            self._gaussian_mean = components[self._selected_model][0].mu
-                 
         thresholded_map = np.zeros(data.shape)
-        thresholded_map[active_map] = data[active_map]
-        if active_map.sum() != 0:
-            self._threshold = data[active_map].min()
+        if isdefined(self.inputs.FNR_threshold):
+            if self._selected_model.endswith('activation_and_deactivation'):
+                self._gaussian_mean = components[self._selected_model][1].mu
+                self._threshold = gamma.ppf(self.inputs.FNR_threshold, components[2].shape, scale=components[2].scale)+components[2].mu
+                thresholded_map[data > self._threshold] = data[data > self._threshold]
+            elif self._selected_model.endswith('and_activation'):
+                self._gaussian_mean = components[self._selected_model][0].mu
+                self._threshold = gamma.ppf(self.inputs.FNR_threshold, components[1].shape, scale=components[1].scale)+components[1].mu
+                thresholded_map[data > self._threshold] = data[data > self._threshold]
+            else:
+                self._gaussian_mean = components[self._selected_model][0].mu
+                self._threshold = masked_data.max() + 1
         else:
-            self._threshold = masked_data.max() + 1 #setting artificially high threshold
+            active_map = np.zeros(data.shape) == 1
+            if self._selected_model.endswith('activation_and_deactivation'):
+                active_map[mask] = np.logical_and(gamma_gauss_pp[:,2] > gamma_gauss_pp[:,1], np.logical_and(gamma_gauss_pp[:,2] > gamma_gauss_pp[:,0], data[mask] > 0.01))
+                self._gaussian_mean = components[self._selected_model][1].mu
+            elif self._selected_model.endswith('and_activation'):
+                active_map[mask] = np.logical_and(gamma_gauss_pp[:,1] > gamma_gauss_pp[:,0], data[mask] > 0.01)
+                self._gaussian_mean = components[self._selected_model][0].mu
+            else:
+                self._gaussian_mean = components[self._selected_model][0].mu
+                     
+    
+            thresholded_map[active_map] = data[active_map]
+            if active_map.sum() != 0:
+                self._threshold = data[active_map].min()
+            else:
+                self._threshold = masked_data.max() + 1 #setting artificially high threshold
             
         self._corrected_threshold = self._threshold + self._gaussian_mean
         #output = open(fname+'threshold.pkl', 'wb')

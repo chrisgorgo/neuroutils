@@ -38,10 +38,32 @@ class GammaComponent(object):
     def fit_weighted(self,data, weights):  
 
         (self.shape, self.scale) = _gam_param(data-self.mu,weights)
-#        data = data[data > 0]
-#        weights = weights[data > 0]
-#        opt_func = lambda param, x, resp: -np.sum(np.log(gamma.pdf(x, param[0], scale=param[1]))*resp,axis=0)
-#        (self.shape, self.scale) = fmin(opt_func, (self.shape,self.scale), args=(data,weights), disp=True)
+
+class RestrictedPositiveGaussianComponent(object):
+    
+    free_parameters = 2
+    
+    def __init__(self, mu, sigma):
+        self.mu = mu
+        self.sigma = sigma
+        self.limit = 0
+    
+    def pdf(self, data):
+        return norm.pdf(data-self.limit, loc=self.mu, scale=math.sqrt(self.sigma))
+
+    def fit_weighted(self,data, weights):
+        weights[data < self.limit] = 0
+        weights_sum = weights.sum()
+        self.mu = np.sum((data-self.limit)*weights)/weights_sum
+        self.sigma = np.sum(((data-self.limit)-self.mu)**2*weights)/weights_sum
+        
+class RestrictedNegativeGaussianComponent(RestrictedPositiveGaussianComponent):
+
+    def fit_weighted(self,data, weights):
+        weights[data > self.limit] = 0
+        weights_sum = weights.sum()
+        self.mu = np.sum((data-self.limit)*weights)/weights_sum
+        self.sigma = np.sum(((data-self.limit)-self.mu)**2*weights)/weights_sum
 
 class NegativeGammaComponent(object):
     
@@ -151,6 +173,11 @@ class EM(object):
                         if isinstance(c, GaussianComponent):
                             component.mu = c.mu
                             break
+                if (isinstance(component, RestrictedNegativeGaussianComponent) or isinstance(component, RestrictedPositiveGaussianComponent)):
+                    for c in self.components:
+                        if isinstance(c, GaussianComponent):
+                            component.limit = c.mu
+                            break
                     
                 component.fit_weighted(data, resp[:,i])
                 self.mix[i] = resp[:,i].sum()/resp[:,i].size
@@ -228,10 +255,12 @@ if __name__ == '__main__':
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_tutorial2/l1output/s1/contrasts/_subject_id_s1/_fwhm_4/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/nipype/examples/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/workingdir/_SNR_0.5_activation_shape_[32, 32, 1]_sim_id_7/contrastestimate/spmT_0001.hdr")
-    img = nb.load("/mnt/data/case_studies/workdir_fmri/17904/pipeline/functional_run/model/threshold_topo_ggmm/_task_name_finger_foot_lips/ggmm/mapflow/_ggmm4/foot_vs_other_t_map.img")
+    #img = nb.load("/mnt/data/case_studies/workdir_fmri/17904/pipeline/functional_run/model/threshold_topo_ggmm/_task_name_finger_foot_lips/ggmm/mapflow/_ggmm4/foot_vs_other_t_map.img")
+    img = nb.load("/media/chris_filo_backu/2010reliability/workdir_sim/simualtion_pipeline/_SNR_0.64_sim_id_1/contrastestimate/spmT_0001.img")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/masked_analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
     #img = nb.load("/home/filo/workspace/ROIThresholding/spm_face_tutorial/workingdir/level1/firstlevel/analysis/_subject_id_M03953/contrastestimate/spmT_0001.hdr")
-    mask = nb.load("/mnt/data/case_studies/workdir_fmri/17904/pipeline/functional_run/model/_task_name_finger_foot_lips/level1estimate/mask.img")
+    #mask = nb.load("/mnt/data/case_studies/workdir_fmri/17904/pipeline/functional_run/model/_task_name_finger_foot_lips/level1estimate/mask.img")
+    mask = nb.load('/media/chris_filo_backu/2010reliability/workdir_sim/simualtion_pipeline/_SNR_0.64_sim_id_1/level1estimate/mask.img')
     data = img.get_data()[mask.get_data() > 0]
     #data = np.array(img.get_data().ravel())
     
@@ -249,12 +278,16 @@ if __name__ == '__main__':
     
     noise_activation_and_deactivation_components = [NegativeGammaComponent(4, 5)] + deepcopy(noise_and_activation_components)
     noise_zero_activation_and_deactivation_components = [NegativeGammaComponent(4, 5)] + deepcopy(noise_zero_and_activation_components)
+    
+    pure_gaussian_mix = [GaussianComponent(0, 10), RestrictedPositiveGaussianComponent(4,5)]
 
-    components = noise_activation_and_deactivation_components
+    components = noise_and_activation_components
     
     em = EM(components)
     
     em.fit(data.ravel().squeeze())
+    print em.BIC(data.ravel().squeeze())
+    print gamma.ppf(0.05, components[1].shape, scale=components[1].scale)+components[1].mu
     
     plt.figure()
     plt.hist(data, bins=50, normed=True)
